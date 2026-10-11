@@ -14,7 +14,7 @@
 #         --help
 # ============================================================================
 INSTALLER_VERSION=1.1.1
-AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG-UDR7}          # ← ваш GitHub: владелец/репозиторий
+AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz
 DD=${DD:-/data/awg}
@@ -50,14 +50,18 @@ ask(){   # ask ПЕРЕМЕННАЯ "вопрос" [по умолчанию]
   [ -z "$__ask_a" ] && __ask_a=$__ask_d
   printf -v "$__ask_v" '%s' "$__ask_a"
 }
-yn(){    # yn "вопрос" [Y|N] → 0 да, 1 нет
-  local a d=${2:-Y} h
-  if [ "$d" = Y ]; then h="Да/нет"; else h="да/Нет"; fi
+yn(){    # yn "вопрос" [Y|N] → 0 да, 1 нет. Пустой Enter — ответ по умолчанию.
+  local a l d=${2:-Y} h
+  if [ "$d" = Y ]; then h="да/нет, Enter = ${B}да${N}"; else h="да/нет, Enter = ${B}нет${N}"; fi
   while :; do
     ask a "$1 ($h)" ""
     [ -z "$a" ] && { [ "$d" = Y ]; return; }
-    case "$a" in y|Y|yes|Yes|YES|д|Д|да|Да|ДА) return 0;; n|N|no|No|NO|н|Н|нет|Нет|НЕТ) return 1;; esac
-    warn "Ответьте «да» или «нет» (Enter — вариант по умолчанию)."
+    l=${a,,}   # латиница в любом регистре; кириллица перечислена явно (локаль роутера может быть C)
+    case "$l" in
+      y|yes|д|да|Д|Да|ДА|дА) return 0;;
+      n|no|н|нет|Н|Нет|НЕТ|нЕТ|НЕт|нЕт|неТ|НеТ) return 1;;
+    esac
+    warn "Не понял «$a». Ответьте да/нет (подойдут и yes/no, y/n) или нажмите Enter — будет «$([ "$d" = Y ] && echo да || echo нет)»."
   done
 }
 choose(){  # choose ПЕРЕМЕННАЯ "заголовок" "вариант" ... → номер варианта
@@ -71,6 +75,16 @@ choose(){  # choose ПЕРЕМЕННАЯ "заголовок" "вариант" .
   done
 }
 pause(){ local _; ask _ "${1:-Нажмите Enter, чтобы продолжить}" ""; }
+answers_help(){  # памятка, как отвечать: один раз за запуск
+  [ -n "${ANSWERS_SHOWN:-}" ] && return 0; ANSWERS_SHOWN=1
+  say
+  say "  ${B}Как отвечать на вопросы${N}"
+  say "    да / нет     «да» или «нет»; подойдут и yes/no, y/n, в любом регистре"
+  say "    Enter        пустой ответ = вариант по умолчанию, он указан в скобках: (да/нет, Enter = ${B}да${N})"
+  say "    ${D}[значение]${N}   значение по умолчанию в поле ввода, Enter его принимает"
+  say "    номер        в списках выбирается номером, Enter = 1"
+  say "    Ctrl+C       прервать: сделанное останется, повторный запуск продолжит с нужного шага"
+}
 read_secret(){ # read_secret ПЕРЕМЕННАЯ "вопрос" — без эха
   local __rs_v=$1 __rs_a
   printf '%s' "  ${B}?${N} $2: "
@@ -1134,7 +1148,7 @@ main_menu(){
   done
 }
 
-case "${1:-}" in --status|--help|-h) ;; *) open_tty;; esac
+case "${1:-}" in --status|--help|-h) ;; *) open_tty; answers_help;; esac
 case "${1:-}" in
   --update)    need_root; do_update;;
   --restore)   need_root; do_restore;;

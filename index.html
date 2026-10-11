@@ -236,14 +236,14 @@ kbd{font-family:var(--f-mono);font-size:.82em;border:1px solid var(--line);borde
   <div class="vars">
     <label for="v-router">IP роутера в вашей сети (подставится в команды)<input id="v-router" data-var="ROUTER_IP" value="192.168.1.1" autocomplete="off" spellcheck="false"></label>
     <label for="v-vps">Внешний IP вашего VPS (для сценариев B и C)<input id="v-vps" data-var="VPS_IP" value="203.0.113.10" autocomplete="off" spellcheck="false"></label>
-    <label for="v-repo">Репозиторий установщика на GitHub<input id="v-repo" data-var="REPO" value="lexer86/AmneziaWG-UDR7" autocomplete="off" spellcheck="false"></label>
+    <label for="v-repo">Репозиторий установщика на GitHub<input id="v-repo" data-var="REPO" value="lexer86/AmneziaWG3.1-UDR7" autocomplete="off" spellcheck="false"></label>
   </div>
 </section>
 
 <section id="auto" class="part" data-n="⚡" data-title="Установщик одной командой" data-need="*">
   <div class="ph"><div class="num">⚡</div><div><h2>Установщик одной командой</h2></div></div>
   <p>Установщик <code>install.sh</code> делает всё, что описано в частях 0–11: проверяет роутер, ставит бинарники, принимает конфиг, поднимает и проверяет туннели, сам настраивает ваш VPS по SSH, находит таблицу и метку PBR, запускает сторожа и по желанию ставит панель, аудит и Telegram. На каждом шаге он проверяет результат и при ошибке предлагает варианты: повторить, заменить конфиг, запустить диагностику.</p>
-<figure class="cb"><figcaption><span class="on on-router">Роутер</span><span class="cbt">первый запуск</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG-UDR7</span>/main/install.sh)</code></pre></figure>
+<figure class="cb"><figcaption><span class="on on-router">Роутер</span><span class="cbt">первый запуск</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG3.1-UDR7</span>/main/install.sh)</code></pre></figure>
   <div class="tw"><table>
     <tr><th>Мастер спросит</th><th>Что проверит</th></tr>
     <tr><td>Сценарий A, B или C</td><td>aarch64, UniFi OS, <code>/dev/net/tun</code>, место на <code>/data</code>, доступ к GitHub, остатки старых установок</td></tr>

@@ -1,5 +1,5 @@
 # AmneziaWG для UniFi Dream Router 7
-Пошагово можно посмотреть в html на Github https://lexer86.github.io/AmneziaWG-UDR7/
+Пошагово можно посмотреть в html на Github https://lexer86.github.io/AmneziaWG3.1-UDR7/
 
 Туннель AmneziaWG прямо на UDR7, встроенный в штатные правила **Policy-Based Routes** UniFi: в туннель уходят только те устройства, сети и домены, которые вы выбрали в интерфейсе UniFi. По желанию: запасной канал на своём VPS с автопереключением, панель состояния при входе по SSH, аудит и уведомления в Telegram.
 
@@ -8,7 +8,7 @@
 На роутере по SSH под root:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG-UDR7/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/install.sh)
 ```
 
 Мастер спросит сценарий, конфиги и опции, проверит каждый шаг и при ошибке предложит варианты. Повторный запуск открывает меню обслуживания:
