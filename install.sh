@@ -13,7 +13,7 @@
 #         --uninstall удалить
 #         --help
 # ============================================================================
-INSTALLER_VERSION=1.2.0
+INSTALLER_VERSION=1.2.1
 AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz
@@ -40,13 +40,28 @@ die(){ err "$*"; exit 1; }
 
 # ---------------------------------------------------------------- ввод -----
 TTY_IN=${AWG_TTY:-/dev/tty}
-open_tty(){ exec 3<"$TTY_IN" 2>/dev/null || { echo "Нужен интерактивный терминал: запустите установщик в SSH-сессии."; exit 1; }; }
+open_tty(){
+  exec 3<"$TTY_IN" 2>/dev/null || { echo "Нужен интерактивный терминал: запустите установщик в SSH-сессии."; exit 1; }
+  # Backspace по кириллице: без IUTF8 терминал стирает один байт из двух, и в ответ попадает «мусор».
+  [ -t 3 ] && { TTY_SAVED=$(stty -g <&3 2>/dev/null); stty iutf8 <&3 2>/dev/null; }
+}
+tty_restore(){ [ -n "${TTY_SAVED:-}" ] && stty "$TTY_SAVED" <&3 2>/dev/null; return 0; }
+# Только латиница/ASCII без управляющих символов. 0 — строка уже чистая.
+ascii_clean(){ LC_ALL=C tr -d '\000-\010\013-\037\177-\377'; }
+has_junk(){ LC_ALL=C grep -q $'[^\t -~]' <<< "$1"; }
 rd(){ IFS= read -r -u 3 "$@"; }
 ask(){   # ask ПЕРЕМЕННАЯ "вопрос" [по умолчанию]
   local __ask_v=$1 __ask_p=$2 __ask_d=$3 __ask_a
   printf '%s' "  ${B}?${N} $__ask_p${__ask_d:+ ${D}[$__ask_d]${N}}: "
   rd __ask_a || { say; die "Ввод закрыт, установка прервана."; }
-  __ask_a=${__ask_a%$'\r'}; __ask_a=${__ask_a#"${__ask_a%%[![:space:]]*}"}; __ask_a=${__ask_a%"${__ask_a##*[![:space:]]}"}
+  __ask_a=${__ask_a%$'\r'}
+  __ask_a=$(LC_ALL=C tr -d '\000-\010\013-\037\177' <<< "$__ask_a")   # Backspace/стрелки, попавшие в ответ
+  if [ -z "${ASK_TEXT:-}" ] && has_junk "$__ask_a"; then
+    local __ask_c; __ask_c=$(printf '%s' "$__ask_a" | ascii_clean)
+    warn "в ответе были не-латинские символы (русская раскладка?) — убрал их: «${__ask_c}»"
+    __ask_a=$__ask_c
+  fi
+  __ask_a=${__ask_a#"${__ask_a%%[![:space:]]*}"}; __ask_a=${__ask_a%"${__ask_a##*[![:space:]]}"}
   [ -z "$__ask_a" ] && __ask_a=$__ask_d
   printf -v "$__ask_v" '%s' "$__ask_a"
 }
@@ -54,7 +69,7 @@ yn(){    # yn "вопрос" [Y|N] → 0 да, 1 нет. Пустой Enter — 
   local a l d=${2:-Y} dv
   if [ "$d" = Y ]; then dv=yes; else dv=no; fi
   while :; do
-    ask a "$1 (yes/no)" "$dv"
+    ASK_TEXT=1 ask a "$1 (yes/no)" "$dv"
     l=${a,,}   # латиница в любом регистре; кириллица перечислена явно (локаль роутера может быть C)
     case "$l" in
       y|yes|д|да|Д|Да|ДА|дА) return 0;;
@@ -90,14 +105,24 @@ read_secret(){ # read_secret ПЕРЕМЕННАЯ "вопрос" — без эх
   say; printf -v "$__rs_v" '%s' "${__rs_a%$'\r'}"
 }
 read_paste(){ # read_paste ФАЙЛ — многострочный ввод до строки END или Ctrl+D
-  local f=$1 l
+  local f=$1 l c n=0 fixed=""
   ( umask 077; : > "$f" )
   say "    ${D}Вставьте текст целиком. Затем на новой строке напишите ${N}${B}END${N}${D} и нажмите Enter (или Ctrl+D).${N}"
   while IFS= read -r -u 3 l; do
     l=${l%$'\r'}
     [ "$l" = END ] && break
+    n=$((n+1))
+    if has_junk "$l"; then
+      c=$(printf '%s' "$l" | ascii_clean)
+      case "$c" in \#*|\;*) ;; *) fixed="$fixed $n${c:+ (${c%%[ =]*})}";; esac
+      l=$c
+    fi
     printf '%s\n' "$l" >> "$f"
   done
+  if [ -n "$fixed" ]; then
+    warn "в строках$fixed были не-латинские или служебные символы (русская раскладка, Backspace) — убраны."
+    hint "Если туннель не поднимется, вставьте конфиг заново: скопируйте его из файла, а не набирайте руками."
+  fi
 }
 
 # ---------------------------------------------------------------- утилиты --
@@ -127,6 +152,7 @@ wan_if(){ local w; w=$(env_get WANIF); [ -z "$w" ] && w=$(ip -4 route get 1.1.1.
 svc_active(){ systemctl is-active --quiet "$1" 2>/dev/null; }
 
 cleanup_on_exit(){
+  tty_restore
   [ -n "$VPS_IP" ] && ssh -O exit -o "ControlPath=/tmp/awg-ssh-%r@%h:%p" -p "${VPS_SSHPORT:-22}" "${VPS_USER:-root}@$VPS_IP" >/dev/null 2>&1
   rm -rf "$WORK" 2>/dev/null
 }
@@ -318,7 +344,20 @@ check_conf(){ # check_conf ФАЙЛ → CONF_EP CONF_ADDR CONF_AWG; 0 = годе
   CONF_ADDR=$(conf_get "$f" Address | tr ',' '\n' | tr -d ' \t' | grep -m1 '\.')
   [ -n "$CONF_ADDR" ] || { err "нет IPv4-адреса в строке Address"; bad=1; }
   grep -qiE '^[[:space:]]*Jc[[:space:]]*=' "$f" && CONF_AWG=1
+  local l; while IFS= read -r l; do err "$l"; bad=1; done < <(conf_lint "$f")
   return $bad
+}
+conf_lint(){  # conf_lint ФАЙЛ — печатает проблемы: посторонние символы, битые ключи, нечисловые параметры
+  LC_ALL=C awk '
+    { sub(/\r$/,""); line=$0 }
+    line ~ /^[ \t]*([#;]|$)/ { next }
+    { k=line; sub(/[ \t]*=.*/,"",k); gsub(/[ \t]/,"",k); v=line; if (!sub(/^[^=]*=[ \t]*/,"",v)) v=""; sub(/[ \t]+$/,"",v); lk=tolower(k) }
+    line ~ /[^\t -~]/ { printf "строка %d (%s): посторонние символы (русская раскладка, Backspace?)\n", NR, (k~/^[A-Za-z0-9]+$/ ? k : "?"); next }
+    lk ~ /^(privatekey|publickey|presharedkey)$/ && v !~ /^[A-Za-z0-9+\/]{43}=$/ { printf "строка %d (%s): ключ не похож на ключ WireGuard (44 символа base64)\n", NR, k; next }
+    lk ~ /^(jc|jmin|jmax|s[1-4]|listenport|mtu|persistentkeepalive)$/ && v !~ /^[0-9]+$/ { printf "строка %d (%s): ожидается число, а не «%s»\n", NR, k, v; next }
+    lk ~ /^h[1-4]$/ && v !~ /^[0-9]+(-[0-9]+)?$/ { printf "строка %d (%s): ожидается число или диапазон, а не «%s»\n", NR, k, v; next }
+    lk == "endpoint" && v !~ /^[A-Za-z0-9.\[\]:-]+:[0-9]+$/ { printf "строка %d (Endpoint): ожидается адрес:порт, а не «%s»\n", NR, v; next }
+  ' "$1"
 }
 conf_summary(){ check_conf "$1" >/dev/null 2>&1; info "сервер ${CONF_EP:-?}, адрес ${CONF_ADDR:-?}, $( [ "$CONF_AWG" = 1 ] && echo 'AmneziaWG (обфускация есть)' || echo 'обычный WireGuard без обфускации')"; }
 
@@ -326,7 +365,12 @@ get_conf(){  # get_conf ИМЯ_ФАЙЛА "описание" — кладёт к
   local name=$1 what=$2 dest=$DD/$1 a p tmp=$DD/.incoming.conf
   if [ -s "$dest" ]; then
     info "уже есть $dest:"; conf_summary "$dest"
-    yn "Использовать его?" Y && return 0
+    if [ -n "$(conf_lint "$dest")" ]; then
+      conf_lint "$dest" | while IFS= read -r p; do warn "$p"; done
+      yn "Конфиг повреждён. Всё равно использовать?" N && return 0
+    else
+      yn "Использовать его?" Y && return 0
+    fi
   fi
   while :; do
     choose a "Как передать $what?" \
@@ -982,7 +1026,7 @@ step_telegram(){
   fi
   local rn
   info "имя роутера стоит первой строкой каждого сообщения и работает как хэштег: если в один чат пишут несколько роутеров, по нему видны сообщения одного"
-  ask rn "Имя роутера в сообщениях" "${ROUTER_NAME:-$(hostname)}"
+  ASK_TEXT=1 ask rn "Имя роутера в сообщениях" "${ROUTER_NAME:-$(hostname)}"
   rn=$(printf '%s' "$rn" | tr -d '"$`\\')
   ( umask 077; printf 'TG_TOKEN=%s\nTG_CHAT=%s\nREPORT_TIME=%s\nROUTER_NAME="%s"\n' "$TG_TOKEN" "$TG_CHAT" "$t" "$rn" > "$DD/telegram.env" )
   yn "Слать напрямую через провайдера, если оба туннеля недоступны (иначе сообщение отложится)?" Y || echo "TG_NO_WAN=1" >> "$DD/telegram.env"

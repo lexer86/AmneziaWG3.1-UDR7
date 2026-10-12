@@ -1694,11 +1694,27 @@ d1=$(iptables -S FORWARD 2&gt;/dev/null | sort | uniq -d); d2=$(iptables -t mang
 [ -z "$d1$d2" ] &amp;&amp; P "дублей в FORWARD (filter/mangle) нет" || W "дубли в FORWARD: $(echo "$d1$d2" | wc -l) строк" "iptables -S FORWARD | sort | uniq -d; удалите лишнюю копию: iptables -D ..."
 iptables -S OUTPUT 2&gt;/dev/null | grep -q -E 'icmp.*(DROP|REJECT)' &amp;&amp; W "в OUTPUT есть DROP для icmp (остаток теста?)" "iptables -S OUTPUT"
 
+conf_lint(){  # conf_lint ФАЙЛ — печатает проблемы: посторонние символы, битые ключи, нечисловые параметры
+  LC_ALL=C awk '
+    { sub(/\r$/,""); line=$0 }
+    line ~ /^[ \t]*([#;]|$)/ { next }
+    { k=line; sub(/[ \t]*=.*/,"",k); gsub(/[ \t]/,"",k); v=line; if (!sub(/^[^=]*=[ \t]*/,"",v)) v=""; sub(/[ \t]+$/,"",v); lk=tolower(k) }
+    line ~ /[^\t -~]/ { printf "строка %d (%s): посторонние символы (русская раскладка, Backspace?)\n", NR, (k~/^[A-Za-z0-9]+$/ ? k : "?"); next }
+    lk ~ /^(privatekey|publickey|presharedkey)$/ &amp;&amp; v !~ /^[A-Za-z0-9+\/]{43}=$/ { printf "строка %d (%s): ключ не похож на ключ WireGuard (44 символа base64)\n", NR, k; next }
+    lk ~ /^(jc|jmin|jmax|s[1-4]|listenport|mtu|persistentkeepalive)$/ &amp;&amp; v !~ /^[0-9]+$/ { printf "строка %d (%s): ожидается число, а не «%s»\n", NR, k, v; next }
+    lk ~ /^h[1-4]$/ &amp;&amp; v !~ /^[0-9]+(-[0-9]+)?$/ { printf "строка %d (%s): ожидается число или диапазон, а не «%s»\n", NR, k, v; next }
+    lk == "endpoint" &amp;&amp; v !~ /^[A-Za-z0-9.\[\]:-]+:[0-9]+$/ { printf "строка %d (Endpoint): ожидается адрес:порт, а не «%s»\n", NR, v; next }
+  ' "$1"
+}
 sec "Файлы"
 for f in main.conf ${BACKUP:+backup.conf} awg.env; do
   [ "$f" = backup.conf ] &amp;&amp; [ ! -e "$DD/backup.conf" ] &amp;&amp; [ -e "$DD/client.conf" ] &amp;&amp; f=client.conf
   [ -e "$DD/$f" ] || { F "нет $DD/$f"; continue; }
   [ "$(stat -c %a "$DD/$f")" = 600 ] &amp;&amp; P "$f: права 600" || W "$f: права $(stat -c %a "$DD/$f")" "chmod 600 $DD/$f"
+  case "$f" in *.conf)
+    lint=$(conf_lint "$DD/$f")
+    [ -z "$lint" ] &amp;&amp; P "$f: синтаксис и символы в порядке" || while IFS= read -r l; do F "$f: $l" "$( [ "$f" = main.conf ] &amp;&amp; echo "/data/awg/install.sh → Компоненты → Заменить конфиг основного туннеля" || echo "/data/awg/install.sh → Компоненты → Добавить/заменить запасной туннель (или исправьте строку: nano $DD/$f)")"; done &lt;&lt;&lt; "$lint";;
+  esac
 done
 [ -e "$DD/telegram.env" ] &amp;&amp; { [ "$(stat -c %a "$DD/telegram.env")" = 600 ] &amp;&amp; P "telegram.env: права 600" || W "telegram.env: права не 600" "chmod 600 $DD/telegram.env"; }
 for f in /tmp/awg-src.tar.gz /tmp/awgx /tmp/awg-sim-down /tmp/rail.conf; do
@@ -1717,7 +1733,7 @@ echo "  Скрипт ничего не меняет. Команды fix выпо
 EOF
 chmod 755 /data/awg/audit.sh
 grep -q "alias awg-audit=" /root/.bashrc 2&gt;/dev/null || echo "alias awg-audit='/data/awg/audit.sh'" &gt;&gt; /root/.bashrc
-/data/awg/audit.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 119 строк">Показать целиком · 119 строк</button></figure>
+/data/awg/audit.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 135 строк">Показать целиком · 135 строк</button></figure>
   <p>Команда <code>awg-audit</code> появится в новом окне SSH. Панель из части 8 для аудита не нужна: если её нет, пункт про <code>.bashrc</code> просто пропускается.</p>
 <figure class="cb out"><figcaption><span class="on on-out">вывод</span><span class="cbt">пример здоровой установки</span></figcaption><pre><code>== Службы и процессы ==
   OK    awg-failover: active

@@ -92,11 +92,27 @@ d1=$(iptables -S FORWARD 2>/dev/null | sort | uniq -d); d2=$(iptables -t mangle 
 [ -z "$d1$d2" ] && P "дублей в FORWARD (filter/mangle) нет" || W "дубли в FORWARD: $(echo "$d1$d2" | wc -l) строк" "iptables -S FORWARD | sort | uniq -d; удалите лишнюю копию: iptables -D ..."
 iptables -S OUTPUT 2>/dev/null | grep -q -E 'icmp.*(DROP|REJECT)' && W "в OUTPUT есть DROP для icmp (остаток теста?)" "iptables -S OUTPUT"
 
+conf_lint(){  # conf_lint ФАЙЛ — печатает проблемы: посторонние символы, битые ключи, нечисловые параметры
+  LC_ALL=C awk '
+    { sub(/\r$/,""); line=$0 }
+    line ~ /^[ \t]*([#;]|$)/ { next }
+    { k=line; sub(/[ \t]*=.*/,"",k); gsub(/[ \t]/,"",k); v=line; if (!sub(/^[^=]*=[ \t]*/,"",v)) v=""; sub(/[ \t]+$/,"",v); lk=tolower(k) }
+    line ~ /[^\t -~]/ { printf "строка %d (%s): посторонние символы (русская раскладка, Backspace?)\n", NR, (k~/^[A-Za-z0-9]+$/ ? k : "?"); next }
+    lk ~ /^(privatekey|publickey|presharedkey)$/ && v !~ /^[A-Za-z0-9+\/]{43}=$/ { printf "строка %d (%s): ключ не похож на ключ WireGuard (44 символа base64)\n", NR, k; next }
+    lk ~ /^(jc|jmin|jmax|s[1-4]|listenport|mtu|persistentkeepalive)$/ && v !~ /^[0-9]+$/ { printf "строка %d (%s): ожидается число, а не «%s»\n", NR, k, v; next }
+    lk ~ /^h[1-4]$/ && v !~ /^[0-9]+(-[0-9]+)?$/ { printf "строка %d (%s): ожидается число или диапазон, а не «%s»\n", NR, k, v; next }
+    lk == "endpoint" && v !~ /^[A-Za-z0-9.\[\]:-]+:[0-9]+$/ { printf "строка %d (Endpoint): ожидается адрес:порт, а не «%s»\n", NR, v; next }
+  ' "$1"
+}
 sec "Файлы"
 for f in main.conf ${BACKUP:+backup.conf} awg.env; do
   [ "$f" = backup.conf ] && [ ! -e "$DD/backup.conf" ] && [ -e "$DD/client.conf" ] && f=client.conf
   [ -e "$DD/$f" ] || { F "нет $DD/$f"; continue; }
   [ "$(stat -c %a "$DD/$f")" = 600 ] && P "$f: права 600" || W "$f: права $(stat -c %a "$DD/$f")" "chmod 600 $DD/$f"
+  case "$f" in *.conf)
+    lint=$(conf_lint "$DD/$f")
+    [ -z "$lint" ] && P "$f: синтаксис и символы в порядке" || while IFS= read -r l; do F "$f: $l" "$( [ "$f" = main.conf ] && echo "/data/awg/install.sh → Компоненты → Заменить конфиг основного туннеля" || echo "/data/awg/install.sh → Компоненты → Добавить/заменить запасной туннель (или исправьте строку: nano $DD/$f)")"; done <<< "$lint";;
+  esac
 done
 [ -e "$DD/telegram.env" ] && { [ "$(stat -c %a "$DD/telegram.env")" = 600 ] && P "telegram.env: права 600" || W "telegram.env: права не 600" "chmod 600 $DD/telegram.env"; }
 for f in /tmp/awg-src.tar.gz /tmp/awgx /tmp/awg-sim-down /tmp/rail.conf; do
