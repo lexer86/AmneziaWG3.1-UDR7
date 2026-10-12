@@ -244,7 +244,7 @@ daemon() {
   local up t i
   [ -f "$ST" ] || save_base
   monitor & MON=$!
-  trap 'kill $MON 2>/dev/null' EXIT INT TERM
+  trap 'kill $MON 2>/dev/null' EXIT; trap 'exit 0' INT TERM   # остановка службой — штатный выход, а не код 143
   # после загрузки ждём рабочий туннель (до 5 минут), иначе сообщение уйдёт в очередь и придёт позже
   sleep 10
   for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
