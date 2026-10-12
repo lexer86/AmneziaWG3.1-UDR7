@@ -1782,7 +1782,7 @@ conf_lint(){  # conf_lint ФАЙЛ — печатает проблемы: пос
     line ~ /^[ \t]*([#;]|$)/ { next }
     { k=line; sub(/[ \t]*=.*/,"",k); gsub(/[ \t]/,"",k); v=line; if (!sub(/^[^=]*=[ \t]*/,"",v)) v=""; sub(/[ \t]+$/,"",v); lk=tolower(k) }
     line ~ /[^\t -~]/ { printf "строка %d (%s): посторонние символы (русская раскладка, Backspace?)\n", NR, (k~/^[A-Za-z0-9]+$/ ? k : "?"); next }
-    lk ~ /^(privatekey|publickey|presharedkey)$/ && v !~ /^[A-Za-z0-9+\/]{43}=$/ { printf "строка %d (%s): ключ не похож на ключ WireGuard (44 символа base64)\n", NR, k; next }
+    lk ~ /^(privatekey|publickey|presharedkey)$/ && !(length(v) == 44 && v ~ /^[A-Za-z0-9+\/]+=$/) { printf "строка %d (%s): ключ не похож на ключ WireGuard (44 символа base64)\n", NR, k; next }
     lk ~ /^(jc|jmin|jmax|s[1-4]|listenport|mtu|persistentkeepalive)$/ && v !~ /^[0-9]+$/ { printf "строка %d (%s): ожидается число, а не «%s»\n", NR, k, v; next }
     lk ~ /^h[1-4]$/ && v !~ /^[0-9]+(-[0-9]+)?$/ { printf "строка %d (%s): ожидается число или диапазон, а не «%s»\n", NR, k, v; next }
     lk == "endpoint" && v !~ /^[A-Za-z0-9.\[\]:-]+:[0-9]+$/ { printf "строка %d (Endpoint): ожидается адрес:порт, а не «%s»\n", NR, v; next }
@@ -2236,7 +2236,7 @@ daemon() {
   local up t i
   [ -f "$ST" ] || save_base
   monitor & MON=$!
-  trap 'kill $MON 2>/dev/null' EXIT INT TERM
+  trap 'kill $MON 2>/dev/null' EXIT; trap 'exit 0' INT TERM   # остановка службой — штатный выход, а не код 143
   # после загрузки ждём рабочий туннель (до 5 минут), иначе сообщение уйдёт в очередь и придёт позже
   sleep 10
   for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
