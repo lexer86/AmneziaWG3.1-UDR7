@@ -49,14 +49,26 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 ssh -t root@192.168.1.1 '/data/awg/install.sh --update'
 ```
 
-## 🌐 Консоль unifi.ui.com из РФ — по желанию
+## 🌐 Доступ к Site Manager UniFi через туннель
 
-`awg-ui-fix.sh` ставит службу `awg-self`: собственный трафик роутера идёт по тем же правилам PBR, что и LAN, а домены `ui.com` резолвятся через AWG. Так облачная консоль перестаёт получать заглушку «Access Prohibited» (HTTP 451). Нужна уже работающая установка.
+`awg-ui-fix.sh` ставит службу `awg-self`: собственный трафик роутера идёт по тем же правилам PBR, что и LAN, а домены `ui.com` резолвятся через AWG. Так Site Manager (unifi.ui.com) перестаёт получать заглушку «Access Prohibited» (HTTP 451). Нужна уже работающая установка.
+
+Установить или обновить:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh)              # установить / обновить
-bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) check        # проверка
-bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) uninstall    # удалить
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh)
+```
+
+Проверить:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) check
+```
+
+Удалить:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) uninstall
 ```
 
 ## ✅ Что мастер проверяет
@@ -83,7 +95,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 | Проверить всю установку | `awg-audit` или `/data/awg/audit.sh` |
 | Диагностика туннелей с двух сторон | `/data/awg/install.sh` → «Диагностика» |
 | Клиенты Teleport / WireGuard Server | `/data/awg/subnets.sh check` |
-| Консоль unifi.ui.com | `/data/awg/self.sh check` |
+| Доступ к Site Manager (unifi.ui.com) | `/data/awg/self.sh check` |
 | Журнал переключений | `tail -n 30 /data/awg/failover.log` |
 
 Разбор типовых проблем — в части 12 гайда, [«Диагностика и проблемы»](https://lexer86.github.io/AmneziaWG3.1-UDR7/#p12).
@@ -92,7 +104,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 
 ```
 install.sh            установщик и меню обслуживания
-awg-ui-fix.sh         по желанию: консоль unifi.ui.com и трафик самого роутера через AWG
+awg-ui-fix.sh         по желанию: Site Manager (unifi.ui.com) и трафик самого роутера через AWG
 index.html            гайд (GitHub Pages): ручная установка, диагностика, справочник
 VERSION
 awg/                  файлы роутера → /data/awg
@@ -116,7 +128,7 @@ assets/readme/        картинки этого README
 
 ## 🧪 Что проверено
 
-- **Вживую на UDR7** (UniFi OS 5.1.33, Network 10.6.106): схема целиком — основной туннель от провайдера по протоколу AmneziaWG 3.1, запасной до своего VPS (Ubuntu 24.04), PBR по доменам и адресам, клиенты VPN-сервера роутера, переключение и возврат, панель, аудит, уведомления, консоль unifi.ui.com.
+- **Вживую на UDR7** (UniFi OS 5.1.33, Network 10.6.106): схема целиком — основной туннель от провайдера по протоколу AmneziaWG 3.1, запасной до своего VPS (Ubuntu 24.04), PBR по доменам и адресам, клиенты VPN-сервера роутера, переключение и возврат, панель, аудит, уведомления, доступ к Site Manager.
 - **На заглушках:** установщик и универсальные версии скриптов (сценарии A, B, C, ошибки конфигов, диагностика, повторное использование сервера, обновление, восстановление, удаление). На чужом роутере они ещё не запускались — сообщайте о проблемах в [Issues](https://github.com/lexer86/AmneziaWG3.1-UDR7/issues).
 
 ## 🔒 Безопасность
