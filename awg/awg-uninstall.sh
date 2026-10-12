@@ -28,6 +28,7 @@ for i in $MAIN $BACKUP; do
   while iptables -D FORWARD -i $i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
   ip link del $i 2>/dev/null
 done
+pkill -f "^\./amneziawg-go |/amneziawg-go " 2>/dev/null   # демоны туннелей (при KillMode=process они не входят в службу)
 for s in $EXTRA_SUBNETS; do ipset del UBIOS4local_network $s 2>/dev/null; done
 sed -i '/AWGS_SHOWN/d;/alias awgs=/d;/alias awg-audit=/d;/alias awg-setup=/d' /root/.bashrc 2>/dev/null
 rm -f /root/.hushlogin

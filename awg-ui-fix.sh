@@ -350,7 +350,8 @@ check(){
     c=$(conntrack -L -s "$wip" -d "$d" 2>/dev/null | head -n1)
     if echo "$c" | grep -q 'dst=10\.8\.1\.'; then echo "OK     $d → через AWG ($(proc_of "$d"))"
     elif [ -n "$c" ]; then
-      if in_pbr "$d"; then echo "WARN   $d → должно идти через AWG, но идёт напрямую через $WANIF ($(proc_of "$d")): старое соединение, нужен reconnect"
+      if grep -qxF "$d" "$UPF" 2>/dev/null; then echo "INFO   $d → DNS роутера, напрямую через $WANIF ($(proc_of "$d")) — так и задумано"
+      elif in_pbr "$d"; then echo "WARN   $d → должно идти через AWG, но идёт напрямую через $WANIF ($(proc_of "$d")): старое соединение, нужен reconnect"
       else echo "INFO   $d → не в списках, напрямую через $WANIF ($(proc_of "$d")) — так и задумано"; fi
     fi
   done

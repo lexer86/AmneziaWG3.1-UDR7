@@ -7,6 +7,8 @@ Wants=network-online.target
 ExecStart=/data/awg/failover.sh
 ExecStopPost=/data/awg/failover.sh cleanup
 Restart=always
+# туннели (amneziawg-go) живут отдельно: перезапуск сторожа их не роняет
+KillMode=process
 RestartSec=5
 
 [Install]
