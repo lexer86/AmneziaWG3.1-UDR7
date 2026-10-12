@@ -1,12 +1,12 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=2">
-  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=2" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=3">
+  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=3" width="100%">
 </picture>
 
 <a href="GUIDE.md">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/guide-dark.svg?v=2">
-    <img alt="Открыть гайд: GUIDE.md, пошаговый мануал" src="assets/readme/guide-light.svg?v=2">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/guide-dark.svg?v=3">
+    <img alt="Открыть гайд: GUIDE.md, пошаговый мануал" src="assets/readme/guide-light.svg?v=3">
   </picture>
 </a>
 
@@ -23,15 +23,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 Мастер спросит сценарий, конфиги и опции, проверит каждый шаг и при ошибке предложит варианты. На вопросы отвечайте `yes`/`no` (подходят и `y`/`n`, `да`/`нет`); пустой Enter принимает ответ в квадратных скобках.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/scenarios-dark.svg">
-  <img alt="Сценарии: A — один туннель от провайдера, части гайда 0 1 2 4 5; B — один туннель до своего VPS, части 0–5; C — основной и запасной, части 0–6. Клиенты VPN-сервера роутера — часть 7. По желанию: 8 панель, 9 аудит, 10 Telegram, 11 обслуживание" src="assets/readme/scenarios-light.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/scenarios-dark.svg?v=3">
+  <img alt="Сценарии: A — один туннель от провайдера, части гайда 0 1 2 4 5; B — один туннель до своего VPS, части 0–5; C — основной и запасной, части 0–6. Клиенты VPN-сервера роутера — часть 7. По желанию: 8 панель, 9 аудит, 10 Telegram, 11 доступ к Site Manager, 12 обслуживание" src="assets/readme/scenarios-light.svg?v=3" width="100%">
 </picture>
 
 | | Что у вас есть | Что делает мастер |
 |---|---|---|
 | **A** | Конфиг AmneziaWG от VPN-провайдера | Поднимает туннель, подключает его к PBR, ставит сторожа |
 | **B** | Свой VPS: Ubuntu/Debian, root, белый IP | Сам заходит на VPS по SSH, собирает и настраивает сервер AWG, забирает конфиг |
-| **C** | Конфиг провайдера + свой VPS | Основной и запасной туннель: переключение после трёх неудачных проверок подряд (обычно меньше минуты), возврат через 10 минут стабильной работы |
+| **C** | Конфиг провайдера + свой VPS | Основной и запасной туннель: переключение после трёх неудачных проверок подряд (15–45 с), возврат через 10 минут стабильной работы |
 
 ## 🛠 Обслуживание
 
@@ -98,7 +98,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 | Доступ к Site Manager (unifi.ui.com) | `/data/awg/self.sh check` |
 | Журнал переключений | `tail -n 30 /data/awg/failover.log` |
 
-Разбор типовых проблем — в части 12 гайда, [«Диагностика и проблемы»](GUIDE.md#p12).
+Разбор типовых проблем — в части 13 гайда, [«Диагностика и проблемы»](GUIDE.md#p12).
 
 ## 📁 Структура
 

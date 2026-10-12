@@ -5,7 +5,7 @@
 Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi. В туннель уходят только те устройства и сайты, которые вы выбрали в интерфейсе UniFi. Дальше по желанию: запасной канал на своём VPS с автопереключением, панель состояния при входе по SSH, аудит и уведомления в Telegram. Всё ставится одной командой через установщик или вручную по шагам ниже.
 
 > [!TIP]
-> Короткий путь — установщик одной командой, см. [«Установщик одной командой»](#auto). Части 0–13 — те же шаги вручную, для понимания и диагностики. Интерактивная версия с выбором сценария: `index.html` (GitHub Pages).
+> Короткий путь — установщик одной командой, см. [«Установщик одной командой»](#auto). Части 0–14 — те же шаги вручную, для понимания и диагностики. Интерактивная версия с выбором сценария: `index.html` (GitHub Pages).
 
 ## Содержание
 
@@ -22,10 +22,10 @@
 - [8. Панель состояния при входе по SSH](#p8)
 - [9. Аудит установки](#p9)
 - [10. Уведомления в Telegram](#p10)
-- [11. Обслуживание](#p11)
-- [12. Диагностика и проблемы](#p12)
-- [13. Справочник](#p13)
-
+- [11. Доступ к Site Manager UniFi через туннель](#ui)
+- [12. Обслуживание](#p11)
+- [13. Диагностика и проблемы](#p12)
+- [14. Справочник](#p13)
 
 ## Выберите свой сценарий
 
@@ -37,19 +37,21 @@
 | **B** · один туннель до своего VPS | Арендованный сервер с Ubuntu, сервер AWG поднимаете сами                  | 0, 1, 2, 3, 4, 5 |
 | **C** · основной + запасной        | Конфиг провайдера и свой VPS; автопереключение и возврат через 10 минут   | 0–6              |
 | \+ клиенты VPN-сервера роутера     | Через туннель ходят и клиенты Teleport / WireGuard Server                 | \+ 7             |
-| По желанию                         | Панель, аудит, Telegram, обслуживание                                     | 8, 9, 10, 11     |
+| По желанию                         | Панель, аудит, Telegram, Site Manager через туннель, обслуживание         | 8, 9, 10, 11, 12 |
 
 <a name="auto"></a>
 
 ## Установщик одной командой
 
-Установщик `install.sh` делает всё, что описано в частях 0–11: проверяет роутер, ставит бинарники, принимает конфиг, поднимает и проверяет туннели, сам настраивает ваш VPS по SSH, находит таблицу и метку PBR, запускает сторожа и по желанию ставит панель, аудит и Telegram. На каждом шаге он проверяет результат и при ошибке предлагает варианты: повторить, заменить конфиг, запустить диагностику.
+Установщик `install.sh` делает всё, что описано в частях 0–10 и 12: проверяет роутер, ставит бинарники, принимает конфиг, поднимает и проверяет туннели, сам настраивает ваш VPS по SSH, находит таблицу и метку PBR, запускает сторожа и по желанию ставит панель, аудит и Telegram. На каждом шаге он проверяет результат и при ошибке предлагает варианты: повторить, заменить конфиг, запустить диагностику.
 
 **Роутер** · первый запуск
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/install.sh)
 ```
+
+На вопросы отвечайте `yes` или `no` (подходят и `y`/`n`, `да`/`нет`). Пустой Enter принимает ответ в квадратных скобках: `Продолжить? (yes/no) [yes]`. С компьютера запускайте через `ssh -t`: установщику нужен терминал.
 
 | Мастер спросит                                               | Что проверит                                                                                                   |
 |--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
@@ -96,7 +98,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 > [!NOTE]
 > **Почему не обычный WireGuard**
 >
-> Это первый урок из реальной установки. Обычный WireGuard до своего сервера поднимался, проходил handshake, отдавал 4–5 пингов и через 5–8 секунд замолкал в обе стороны. Обычный UDP на тот же сервер и порт жил без обрывов (40 из 40 пакетов), смена порта не помогала. Так ведёт себя DPI, который распознаёт WireGuard и рубит поток. AmneziaWG маскирует handshake и размеры пакетов, и с ним тот же сервер работал стабильно. Как проверить это у себя, описано в части [12 «Диагностика и проблемы»](#p12).
+> Это первый урок из реальной установки. Обычный WireGuard до своего сервера поднимался, проходил handshake, отдавал 4–5 пингов и через 5–8 секунд замолкал в обе стороны. Обычный UDP на тот же сервер и порт жил без обрывов (40 из 40 пакетов), смена порта не помогала. Так ведёт себя DPI, который распознаёт WireGuard и рубит поток. AmneziaWG маскирует handshake и размеры пакетов, и с ним тот же сервер работал стабильно. Как проверить это у себя, описано в части [13 «Диагностика и проблемы»](#p12).
 
 > [!NOTE]
 > **Что проверено вживую, а что нет**
@@ -870,6 +872,7 @@ cat > /data/awg/failover.sh <<'EOF'
 #   failover.sh cleanup    убрать свои маршруты из таблицы PBR
 # Параметры: /data/awg/awg.env (создаёт awg-detect.sh).
 DD=${DD:-/data/awg}
+iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
 RS_ENV=$RECOVER_SEC                # RECOVER_SEC из командной строки важнее awg.env (для тестов)
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 [ -n "$RS_ENV" ] && RECOVER_SEC=$RS_ENV
@@ -1019,6 +1022,8 @@ Wants=network-online.target
 ExecStart=/data/awg/failover.sh
 ExecStopPost=/data/awg/failover.sh cleanup
 Restart=always
+# туннели (amneziawg-go) живут отдельно: перезапуск сторожа их не роняет
+KillMode=process
 RestartSec=5
 
 [Install]
@@ -1068,7 +1073,7 @@ blackhole default metric 200
 
 ### 5.5 Подготовьтесь к обновлениям прошивки
 
-Обновление UniFi может очистить `/etc/systemd/system` и `/root/.bashrc`. Раздел `/data` сохраняется, а с ним и копии всех юнитов. Этот скрипт возвращает автозапуск одной командой. Он восстанавливает только то, что у вас установлено: панель, Telegram и очистку баннера из частей 8–10, если вы их потом поставите, тоже.
+Обновление UniFi может очистить `/etc/systemd/system` и `/root/.bashrc`. Раздел `/data` сохраняется, а с ним и копии всех юнитов. Этот скрипт возвращает автозапуск одной командой. Он восстанавливает только то, что у вас установлено: панель, Telegram и очистку баннера из частей 8–10, службы `awg-subnets` и `awg-self` из частей 7 и 11, если вы их потом поставите, тоже.
 
 **Роутер** · создать awg-restore.sh
 
@@ -1082,10 +1087,16 @@ cp "$D/awg-failover.service" /etc/systemd/system/
 NOTIFY=0; MOTD=0
 [ -f "$D/awg-notify.service" ] && [ -f "$D/telegram.env" ] && { NOTIFY=1; cp "$D/awg-notify.service" /etc/systemd/system/; }
 [ -f "$D/awg-motd.service" ] && [ -f "$D/motd.orig" ] && { MOTD=1; cp "$D/awg-motd.service" /etc/systemd/system/; }
+# клиенты VPN-сервера роутера (awg-subnets) и собственный трафик роутера / unifi.ui.com (awg-self)
+SUBN=0; SELF=0
+[ -f "$D/awg-subnets.service" ] && [ -x "$D/subnets.sh" ] && grep -q '^EXTRA_SUBNETS="\?[0-9]' "$D/awg.env" 2>/dev/null && { SUBN=1; cp "$D/awg-subnets.service" /etc/systemd/system/; }
+[ -f "$D/awg-self.service" ] && [ -x "$D/self.sh" ] && { SELF=1; cp "$D/awg-self.service" /etc/systemd/system/; }
 systemctl daemon-reload
 systemctl enable --now awg-failover
 [ $NOTIFY = 1 ] && systemctl enable --now awg-notify
 [ $MOTD = 1 ] && systemctl enable --now awg-motd
+[ $SUBN = 1 ] && systemctl enable --now awg-subnets
+[ $SELF = 1 ] && systemctl enable --now awg-self
 # панель и команды возвращаются, только если соответствующая часть ставилась
 # установщик отмечает выбранные компоненты файлами .panel/.audit; при ручной установке по гайду
 # признак — наличие самих скриптов
@@ -1106,7 +1117,7 @@ EOF
 chmod 755 /data/awg/awg-restore.sh
 ```
 
-Запускать сейчас не нужно. Как пользоваться после обновления, описано в [части 11](#p11).
+Запускать сейчас не нужно. Как пользоваться после обновления, описано в [части 12](#p11).
 
 <a name="p6"></a>
 
@@ -1189,43 +1200,152 @@ tail -f /data/awg/failover.log
 
 ## 7. Клиенты VPN-сервера роутера через туннель
 
-Если на UDR7 работает VPN-сервер (WireGuard Server или Teleport) и вы хотите, чтобы его клиенты, например ваш телефон вне дома, тоже ходили через AWG по тем же правилам PBR. UniFi применяет PBR к источникам из своего списка локальных сетей (ipset `UBIOS4local_network`), а подсети VPN-сервера в нём может не быть. Сторож умеет держать их в этом списке и возвращает их туда каждые 5 секунд, если UniFi пересоберёт ipset.
+Если на UDR7 работает VPN-сервер (Teleport или WireGuard Server) и вы хотите, чтобы его клиенты, например ноутбук или телефон вне дома, выходили в интернет через AWG. Служба `awg-subnets` держит для каждой такой подсети два правила маршрутизации: адреса, до которых есть обычный маршрут (роутер, LAN), остаются локальными, а весь остальной трафик уходит в таблицу PBR, где лежит маршрут сторожа на AWG-туннель. От правил Policy-Based Routes в UniFi это не зависит: клиенты VPN-сервера целиком идут через туннель.
 
 > [!NOTE]
-> **Проверено на одной установке**
+> **Проверено вживую**
 >
-> Клиент WireGuard-сервера роутера (подсеть 192.168.3.0/24) после этого выходил в интернет с IP туннеля по правилам PBR. Как именно это сработает у вас, зависит от того, как задан источник в правиле PBR, поэтому обязательно сделайте проверку в конце.
+> Клиент Teleport (подсеть 192.168.2.0/24) выходит в интернет с IP основного туннеля, а домашняя сеть и сам роутер доступны ему напрямую. Teleport выдаёт каждому клиенту свой маршрут `192.168.2.x dev tlprt0`, служба находит интерфейс по этим маршрутам.
 
 ### 7.1 Узнайте подсеть VPN-сервера
 
-Она указана в настройках сервера: Settings → VPN → VPN Server. Или посмотрите адреса интерфейсов на роутере:
+Она указана в настройках сервера: Settings → VPN → Teleport или VPN Server. Или посмотрите на роутере, пока клиент подключён:
 
 **Роутер**
 
 ```bash
 ip -4 -br addr | grep -v -E '^(lo|eth|br|awg|wgclt)'
+ip -4 route | grep -E 'tlprt|wgsrv'
 ```
 
-### 7.2 Добавьте подсеть в awg.env
+### 7.2 Создайте скрипт и службу
+
+**Роутер** · создать subnets.sh
+
+```bash
+cat > /data/awg/subnets.sh <<'EOF'
+#!/bin/bash
+# awg-subnets: подсети VPN-сервера роутера (WireGuard Server, Teleport и т.п.) целиком идут через AWG-туннель.
+#   subnets.sh run      служба: каждые 5 с сверяет правила
+#   subnets.sh apply    один проход
+#   subnets.sh remove   убрать все правила и маршруты этой службы
+#   subnets.sh check    проверка: OK / WARN / FAIL
+#   subnets.sh status   правила и таблица PBR
+DD=${DD:-/data/awg}
+P_LOCAL=${SUBNET_PRIO_LOCAL:-6100}
+P_PBR=${SUBNET_PRIO_PBR:-6101}
+load(){ EXTRA_SUBNETS=""; TABLE=""; [ -r "$DD/awg.env" ] && . "$DD/awg.env"; }
+# интерфейс VPN-сервера: маршрут на всю подсеть (WireGuard Server) или на отдельных клиентов /32 (Teleport: 192.168.2.1 dev tlprt0)
+sub_iface(){ ip -4 route show table all root "$1" 2>/dev/null | grep -v -E '^(broadcast|local|blackhole|unreachable) ' | awk '{for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)!~/^awg/){print $(i+1); exit}}'; }
+probe_host(){  # адрес подключённого клиента, иначе .2 подсети
+  local a b c d h
+  h=$(ip -4 route show table all root "$1" 2>/dev/null | awk '$1 ~ /\/32$|^[0-9.]+$/ {sub(/\/32$/,"",$1); print $1; exit}')
+  [ -n "$h" ] && { echo "$h"; return; }
+  IFS=. read -r a b c d <<< "${1%/*}"; d=$((d+2)); [ "$d" -gt 254 ] && d=$((d-3)); echo "$a.$b.$c.$d"
+}
+
+cleanup(){  # убрать правила для подсетей не из списка и правила, ведущие не в текущую таблицу
+  local p src tbl keep s
+  ip -4 rule show | awk -v a="$P_LOCAL:" -v b="$P_PBR:" '$1==a || $1==b {print $1, $3, $5}' | while read -r p src tbl; do
+    keep=0
+    for s in $EXTRA_SUBNETS; do [ "$s" = "$src" ] && keep=1; done
+    [ "$p" = "$P_PBR:" ] && [ "${tbl%%.*}" != "$TABLE" ] && keep=0
+    if [ $keep = 0 ]; then
+      ip -4 rule del from "$src" priority "${p%:}" 2>/dev/null
+      [ "$p" = "$P_PBR:" ] && ip -4 route del "$src" table "$TABLE" 2>/dev/null
+    fi
+  done
+}
+apply(){
+  load
+  [ -n "$TABLE" ] && [ "$TABLE" != 0 ] || return 0
+  cleanup
+  local s i
+  for s in $EXTRA_SUBNETS; do
+    ip -4 rule add from "$s" lookup main suppress_prefixlength 0 priority "$P_LOCAL" 2>/dev/null
+    ip -4 rule add from "$s" lookup "$TABLE" priority "$P_PBR" 2>/dev/null
+    i=$(sub_iface "$s")
+    [ -n "$i" ] && ip -4 route replace "$s" dev "$i" table "$TABLE" 2>/dev/null
+  done
+  return 0
+}
+check(){
+  load
+  local s i h out dev rc=0
+  [ -n "$EXTRA_SUBNETS" ] || { echo "INFO   подсети не заданы"; return 0; }
+  for s in $EXTRA_SUBNETS; do
+    if ip -4 rule show | grep -q "^$P_LOCAL:.*from $s lookup main suppress_prefixlength 0"; then echo "OK     $s: локальные адреса остаются локальными (правило $P_LOCAL)"
+    else echo "FAIL   $s: нет правила $P_LOCAL (служба awg-subnets запущена?)"; rc=1; fi
+    if ip -4 rule show | grep -q "^$P_PBR:.*from $s lookup $TABLE"; then echo "OK     $s: интернет-трафик отправляется в таблицу PBR $TABLE (правило $P_PBR)"
+    else echo "FAIL   $s: нет правила $P_PBR в таблицу $TABLE"; rc=1; fi
+    i=$(sub_iface "$s")
+    if [ -z "$i" ] || ! ip link show "$i" >/dev/null 2>&1; then echo "INFO   $s: сейчас нет подключённых клиентов — путь в интернет проверить не на чем (подключите клиента и повторите)"; continue; fi
+    h=$(probe_host "$s")
+    out=$(ip -4 route get 1.1.1.1 from "$h" ${i:+iif $i} 2>&1 | head -n 1)
+    dev=$(echo "$out" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    case "$dev" in
+      awg*) echo "OK     $s: интернет через $dev"
+            iptables -t nat -S POSTROUTING 2>/dev/null | grep -q -- "-o $dev -j MASQUERADE" || { echo "FAIL   нет NAT MASQUERADE на $dev (сторож не запущен?)"; rc=1; } ;;
+      *)    echo "FAIL   $s: интернет идёт через «${dev:-?}», а не через awg-туннель (сторож awg-failover ещё не положил маршрут?)"; rc=1 ;;
+    esac
+  done
+  return $rc
+}
+case "${1:-run}" in
+  run)    trap 'exit 0' TERM INT; while :; do apply; sleep 5 & wait $!; done;;
+  apply)  apply;;
+  remove) load; EXTRA_SUBNETS=""; cleanup;;
+  check)  check;;
+  status) load; ip -4 rule show | grep -E "^($P_LOCAL|$P_PBR):"; echo "-- таблица $TABLE:"; ip -4 route show table "$TABLE";;
+  *)      echo "использование: $0 [run|apply|remove|check|status]"; exit 1;;
+esac
+EOF
+chmod 755 /data/awg/subnets.sh
+```
+
+**Роутер** · служба systemd (копия хранится в /data/awg)
+
+```bash
+cat > /data/awg/awg-subnets.service <<'EOF'
+[Unit]
+Description=AWG: route VPN-server subnets (WireGuard Server, Teleport) through the tunnel
+After=awg-failover.service network-online.target
+
+[Service]
+ExecStart=/data/awg/subnets.sh run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+### 7.3 Укажите подсеть и запустите
 
 **Роутер** · подставьте свою подсеть; несколько через пробел
 
 ```bash
-sed -i 's|^EXTRA_SUBNETS=.*|EXTRA_SUBNETS="192.168.3.0/24"|' /data/awg/awg.env
-systemctl restart awg-failover
-sleep 6; ipset test UBIOS4local_network 192.168.3.0/24
+sed -i 's|^EXTRA_SUBNETS=.*|EXTRA_SUBNETS="192.168.2.0/24"|' /data/awg/awg.env
+cp /data/awg/awg-subnets.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now awg-subnets
+sleep 6; /data/awg/subnets.sh check
 ```
 
-*Вывод — ожидаемо*
+*Вывод — ожидаемо, когда клиент подключён*
 
 ```text
-192.168.3.0/24 is in set UBIOS4local_network.
+OK     192.168.2.0/24: локальные адреса остаются локальными (правило 6100)
+OK     192.168.2.0/24: интернет-трафик отправляется в таблицу PBR 178 (правило 6101)
+OK     192.168.2.0/24: интернет через awgmain
 ```
 
 > [!TIP]
 > **Проверка**
 >
-> С телефона, подключённого к VPN-серверу роутера по мобильному интернету, откройте сайт из правил PBR или 2ip.io (если правило на все адреса): должен быть IP туннеля.
+> С устройства, подключённого к VPN-серверу роутера по мобильному интернету, откройте 2ip.io: должен быть IP туннеля. Домашние устройства и веб-интерфейс роутера при этом открываются как обычно. Если клиентов сейчас нет, `subnets.sh check` так и скажет и проверку пути пропустит.
+
+Установщик делает то же самое в пункте «Клиенты VPN-сервера роутера». Старый способ через ipset `UBIOS4local_network` больше не нужен: сторож по-прежнему добавляет туда подсеть, но маршрут определяют правила `awg-subnets`, они срабатывают раньше метки PBR.
 
 <a name="p8"></a>
 
@@ -1234,9 +1354,9 @@ sleep 6; ipset test UBIOS4local_network 192.168.3.0/24
 При каждом входе по SSH вместо стандартного баннера UniFi вы видите сводку: состояние (HEALTHY / DEGRADED / CRITICAL), предупреждения, активный канал, handshake и скорость обоих туннелей, нагрузку, последние 20 событий, где лежат файлы и шпаргалку команд. Вызвать вручную можно командой `awgs`.
 
 > [!NOTE]
-> **Части 8–11 независимы**
+> **Части 8–12 независимы**
 >
-> Панель, аудит, Telegram и обслуживание не требуют друг друга: ставьте любые и в любом порядке, лишь бы были готовы части 0–5. Скрипты сами смотрят, что установлено: панель показывает строки про аудит и восстановление, только если эти скрипты есть, аудит проверяет панель и Telegram, только если их ставили, а `awg-restore.sh` возвращает только то, что было.
+> Панель, аудит, Telegram, Site Manager и обслуживание не требуют друг друга: ставьте любые и в любом порядке, лишь бы были готовы части 0–5. Скрипты сами смотрят, что установлено: панель показывает строки про аудит и восстановление, только если эти скрипты есть, аудит проверяет панель и Telegram, только если их ставили, а `awg-restore.sh` возвращает только то, что было.
 
 ### 8.1 Скрипт панели
 
@@ -1501,6 +1621,7 @@ cat > /data/awg/audit.sh <<'EOF'
 #!/bin/bash
 # awg-audit — проверка установки на роутере: службы, туннели, правила, файлы. Только чтение.
 DD=${DD:-/data/awg}
+iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
 AWG=${AWG:-$DD/awg}
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 TABLE=${TABLE:-0}; MARK=${MARK:-0x0/0x0}; RAIL_IF=${RAIL_IF:-wgclt1}
@@ -1556,9 +1677,20 @@ c=$(echo "$t" | grep -c 'dev awg')
 [ "$c" = 1 ] && P "в таблице PBR ровно один AWG-маршрут" || { [ "$c" = 0 ] && F "в таблице PBR нет AWG-маршрута" "systemctl restart awg-failover" || W "AWG-маршрутов в таблице: $c (нужен 1)" "systemctl restart awg-failover"; }
 echo "$t" | grep -q blackhole && P "blackhole на месте: при падении туннелей утечки в WAN нет" || W "в таблице нет blackhole" "systemctl restart awg-failover"
 [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = 1 ] && P "ip_forward = 1" || F "ip_forward не 1" "sysctl -w net.ipv4.ip_forward=1"
-for s in $EXTRA_SUBNETS; do
-  ipset test UBIOS4local_network "$s" >/dev/null 2>&1 && P "подсеть $s в ipset UBIOS4local_network" || W "подсети $s нет в ipset" "сторож добавит её сам через 5 с; если нет — systemctl restart awg-failover"
-done
+if [ -n "$EXTRA_SUBNETS" ] && [ -x "$DD/subnets.sh" ]; then   # схема awg-subnets (установщик 1.1+)
+  [ "$(systemctl is-active awg-subnets 2>/dev/null)" = active ] && P "awg-subnets: active (подсети $EXTRA_SUBNETS)" || F "awg-subnets не запущена" "systemctl enable --now awg-subnets"
+  for s in $EXTRA_SUBNETS; do
+    ip -4 rule show | grep -q "^6101:.*from $s lookup" && P "подсеть $s: правило 6101 в таблицу PBR" || W "подсеть $s: нет правила 6101" "$DD/subnets.sh check"
+  done
+else
+  for s in $EXTRA_SUBNETS; do
+    ipset test UBIOS4local_network "$s" >/dev/null 2>&1 && P "подсеть $s в ipset UBIOS4local_network" || W "подсети $s нет в ipset" "сторож добавит её сам через 5 с; если нет — systemctl restart awg-failover"
+  done
+fi
+if [ -x "$DD/self.sh" ] && [ -f "$DD/awg-self.service" ]; then   # awg-self (awg-ui-fix.sh)
+  [ "$(systemctl is-active awg-self 2>/dev/null)" = active ] && P "awg-self: active (трафик роутера по PBR, unifi.ui.com)" || W "awg-self не запущена" "cp $DD/awg-self.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now awg-self"
+  [ "$(iptables -t mangle -S OUTPUT 2>/dev/null | grep '^-A OUTPUT' | head -n1)" = "-A OUTPUT -j AWG_SELF" ] && P "AWG_SELF первой в mangle OUTPUT" || W "AWG_SELF не первой в mangle OUTPUT" "$DD/self.sh check"
+fi
 
 sec "iptables"
 for i in $TUNS; do
@@ -2006,13 +2138,490 @@ systemctl enable --now awg-notify
 
 Если роутер выключится целиком, сообщить об этом будет некому. Для такого случая нужен внешний мониторинг (например, healthchecks.io с пингом раз в 5 минут).
 
+<a name="ui"></a>
+
+## 11. Доступ к Site Manager UniFi через туннель
+
+Из РФ облачная консоль unifi.ui.com (Site Manager) может открываться с заглушкой «Access Prohibited» (HTTP 451): geo-DNS Ubiquiti отдаёт роутеру адрес заглушки. Скрипт `awg-ui-fix.sh` ставит службу `awg-self`. Она делает две вещи: домены `ui.com` роутер резолвит через 9.9.9.9 по туннелю, а соединения самого роутера с облаком Ubiquiti и с адресами из ваших правил PBR «для всех устройств» тоже идут через AWG. Остальной трафик роутера, включая его обычный DNS, идёт через провайдера.
+
+> [!NOTE]
+> **Нужно**
+>
+> Готовые части 0–5. Руками в UniFi ничего настраивать не нужно. Если раньше вы создавали Forward Domain для ui.com или правило PBR для 9.9.9.9, их можно удалить: служба делает то же самое.
+
+### 11.1 Установите
+
+**Роутер** · установить или обновить
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh)
+```
+
+Без GitHub тот же скрипт можно создать из текста ниже и запустить: `bash /root/awg-ui-fix.sh`.
+
+**Роутер** · создать awg-ui-fix.sh (по желанию, вместо скачивания)
+
+```bash
+cat > /root/awg-ui-fix.sh <<'EOF'
+#!/bin/bash
+# awg-ui-fix: unifi.ui.com из РФ + собственный трафик роутера через AmneziaWG на UniFi Dream Router 7.
+# Ставит /data/awg/self.sh и службу awg-self. Ничего не нужно настраивать руками в интерфейсе UniFi:
+#   - домены ui.com dnsmasq резолвит через 9.9.9.9, и этот запрос идёт через AWG (обход geo-DNS-заглушки 451);
+#   - связь консоли с облаком Ubiquiti идёт через AWG;
+#   - соединения самого роутера следуют Traffic Routes UniFi (правила без Kill Switch), как и LAN.
+# Нужно: уже установленный AmneziaWG из /data/awg (awg.env с TABLE и MARK, служба awg-failover).
+#
+# Запуск с компьютера (R — SSH-алиас роутера):
+#   ssh R 'bash -s' < awg-ui-fix.sh                 установить / обновить
+#   ssh R 'bash -s -- check' < awg-ui-fix.sh        только проверка
+#   ssh R 'bash -s -- uninstall' < awg-ui-fix.sh    удалить
+# Настройки (в /data/awg/awg.env): UI_FIX=yes|no, UI_DOMAINS="ui.com", UI_DNS=9.9.9.9
+main(){
+DD=/data/awg
+act=${1:-install}
+die(){ echo "ОШИБКА: $*"; exit 1; }
+[ "$(id -u)" = 0 ] || die "нужен root"
+[ -r "$DD/awg.env" ] || die "нет $DD/awg.env — сначала установите AmneziaWG"
+. "$DD/awg.env"
+[ -n "${TABLE:-}" ] && [ -n "${MARK:-}" ] || die "в $DD/awg.env нет TABLE/MARK — запустите $DD/awg-detect.sh"
+for b in ipset iptables conntrack ss curl pidof; do command -v $b >/dev/null || die "нет команды $b"; done
+
+case "$act" in
+  check)
+    [ -x "$DD/self.sh" ] || die "self.sh не установлен"
+    systemctl is-active awg-self; "$DD/self.sh" check; exit $?;;
+  uninstall)
+    systemctl disable --now awg-self 2>/dev/null
+    rm -f /etc/systemd/system/awg-self.service; systemctl daemon-reload
+    [ -x "$DD/self.sh" ] && "$DD/self.sh" remove
+    echo "awg-self удалён: правила убраны, файл dnsmasq удалён, dnsmasq перезапущен. /data/awg/self.sh оставлен."
+    exit 0;;
+  install) ;;
+  *) die "неизвестное действие: $act (install | check | uninstall)";;
+esac
+
+systemctl is-active -q awg-failover || echo "ВНИМАНИЕ: awg-failover не запущен — маршрута в туннель (таблица $TABLE) может не быть"
+ip -4 route show table "$TABLE" | grep -q '^default dev awg' || echo "ВНИМАНИЕ: в таблице $TABLE нет маршрута через awg — проверьте туннель"
+
+cat > "$DD/self.sh.new" <<'EOF_SELF'
+#!/bin/bash
+# awg-self: собственный трафик роутера UDR7 через AmneziaWG + рабочий unifi.ui.com из РФ.
+#
+# 1) Зеркало PBR: соединения самого роутера идут по тем же Traffic Routes UniFi, что и LAN
+#    (правила UniFi без Kill Switch, цепочка UBIOS_PREROUTING_PBR).
+# 2) UI-модуль (UI_FIX=yes в awg.env) — то, что раньше делалось руками в UniFi:
+#    - dnsmasq спрашивает домены UI_DOMAINS (ui.com) у резолвера UI_DNS (9.9.9.9), остальной DNS не трогается;
+#    - запросы роутера к UI_DNS идут через AWG (geo-DNS Ubiquiti иначе отдаёт заглушку «Access Prohibited», HTTP 451);
+#    - адреса UI_DOMAINS, которые резолвит dnsmasq, попадают в ipset AWG_UI, и соединения консоли с облаком
+#      Ubiquiti тоже идут через AWG.
+#
+#   self.sh run        служба (awg-self.service): каждые 5 с сверяет правила
+#   self.sh apply      один проход
+#   self.sh reconnect  оборвать текущие соединения роутера к адресам из PBR, чтобы они переподключились через AWG
+#   self.sh remove     убрать всё, что ставит эта служба (вкл. файл dnsmasq)
+#   self.sh check      проверка: OK / WARN / FAIL
+#   self.sh status     цепочка со счётчиками
+DD=${DD:-/data/awg}
+iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
+CH=AWG_SELF
+UISET=AWG_UI
+UIFILE=zz-awg-ui.conf
+HASHF=/tmp/awg-self.hash
+RESTF=/tmp/awg-self.dnsmasq-restart
+PRIV="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4"
+
+load(){
+  TABLE=""; MARK=""; MAIN=awgmain; BACKUP=""; WANIF=ppp0; VPS_IP=""
+  UI_FIX=yes; UI_DOMAINS="ui.com"; UI_DNS=9.9.9.9
+  [ -r "$DD/awg.env" ] && . "$DD/awg.env"
+}
+ui_on(){ [ "$UI_FIX" = yes ] && [ -n "$UI_DOMAINS" ] && [ -n "$UI_DNS" ]; }
+ensure(){ local t=$1; shift; iptables -t "$t" -C "$@" 2>/dev/null || iptables -t "$t" -A "$@"; }
+wanip(){ ip -4 -o addr show dev "$WANIF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1; }
+proc_of(){ ss -tnp state established dst "$1" 2>/dev/null | awk 'NR==2{print $NF}' | grep -oE '"[^"]+"' | head -n1; }
+log(){ logger -t awg-self "$*" 2>/dev/null; }
+
+# адреса VPS туннелей — их никогда не заворачиваем в туннель
+endpoints(){
+  { "$DD/awg" show all endpoints 2>/dev/null | awk '{print $3}'; wg show all endpoints 2>/dev/null | awk '{print $3}'; echo "$VPS_IP"; } \
+    | sed -E 's/:[0-9]+$//; s/^\[|\]$//g' | grep -E '^[0-9.]+$' | sort -u
+}
+
+# адреса, через которые роутер резолвит ВСЁ остальное (dnscrypt-proxy / DoH UniFi и server= в dnsmasq).
+# Их никогда не заворачиваем в туннель, даже если IP случайно попал в списки PBR (общие CDN-адреса Cloudflare и т.п.):
+# иначе через AWG уйдёт весь DNS роутера. Список запоминается, чтобы не зависеть от момента проверки.
+UPF=/tmp/awg-self.upstreams
+upstreams(){
+  local pid conf
+  {
+    cat "$UPF" 2>/dev/null
+    ss -tunp state established 2>/dev/null | awk '/"dnscrypt-proxy"/{print $5}'
+    if pid=$(dnsmasq_pid); then
+      conf=$(tr '\0' '\n' < /proc/$pid/cmdline | sed -n 's/^--conf-file=//p')
+      grep -hE '^server=[0-9]' "$conf" "$(conf_dir "$pid")"/* 2>/dev/null | grep -v "$UIFILE" | cut -d= -f2 | cut -d'#' -f1 | cut -d@ -f1
+    fi
+  } | sed -E 's/^\[::ffff://; s/\]?:[0-9]+$//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+    | grep -v -E '^(127\.|10\.|192\.168\.|0\.)' | grep -v -x -F "${UI_DNS:-none}" | sort -u > "$UPF.tmp"
+  mv -f "$UPF.tmp" "$UPF"; cat "$UPF"
+}
+unstick(){  # перевести текущие соединения роутера к адресу обратно на WAN (они могли уйти в AWG до исключения)
+  local wip; wip=$(wanip)
+  [ -n "$wip" ] && conntrack -L -s "$wip" -d "$1" 2>/dev/null | grep -q 'dst=10\.8\.1\.' || return 0
+  ss -K dst "$1" >/dev/null 2>&1; conntrack -D -s "$wip" -d "$1" >/dev/null 2>&1
+  log "DNS-апстрим $1 возвращён на $WANIF"
+}
+
+# правила маркировки UniFi PBR без условия «источник = локальная сеть»
+want(){
+  iptables -t mangle -S UBIOS_PREROUTING_PBR 2>/dev/null | grep -- ' -j MARK ' \
+    | sed -E -e 's/^-A UBIOS_PREROUTING_PBR //' \
+             -e 's/-m set --match-set UBIOS_local_network(v6)? src //' \
+             -e 's/-m comment --comment [^ ]+ //' \
+    | grep -v -E -- '--mac-source|(^| )-i |--match-set [^ ]+ src|(^| )-s '
+}
+
+hook(){  # переход в нашу цепочку должен быть ПЕРВЫМ в mangle OUTPUT (до UBIOS_OUTPUT_JUMP)
+  [ "$(iptables -t mangle -S OUTPUT | grep '^-A OUTPUT' | head -n1)" = "-A OUTPUT -j $CH" ] && return
+  while iptables -t mangle -D OUTPUT -j $CH 2>/dev/null; do :; done
+  iptables -t mangle -I OUTPUT 1 -j $CH
+}
+
+mss(){  # MSS для соединений самого роутера через туннель
+  local i m
+  for i in $MAIN $BACKUP; do
+    m=$(cat /sys/class/net/$i/mtu 2>/dev/null) || continue
+    ensure mangle POSTROUTING -o "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    ensure mangle PREROUTING  -i "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss $((m-40))
+  done
+}
+
+# ---------- dnsmasq (UI-модуль) ----------
+dnsmasq_pid(){  # основной dnsmasq UniFi (тот, что с --conf-dir: DNS + DHCP для LAN)
+  local p
+  p=$(cat /run/dnsmasq-main.pid 2>/dev/null)
+  if [ -n "$p" ] && [ -d "/proc/$p" ]; then echo "$p"; return 0; fi
+  for p in $(pidof dnsmasq); do
+    tr '\0' '\n' < /proc/$p/cmdline 2>/dev/null | grep -q -- '^--conf-dir=' && { echo "$p"; return 0; }
+  done
+  return 1
+}
+conf_dir(){ tr '\0' '\n' < /proc/$1/cmdline 2>/dev/null | sed -n 's/^--conf-dir=//p' | cut -d, -f1 | head -n1; }
+pstart(){  # время старта процесса, epoch
+  local st bt hz
+  st=$(awk '{print $22}' /proc/$1/stat 2>/dev/null); bt=$(awk '/^btime/{print $2}' /proc/stat); hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+  [ -n "$st" ] && echo $(( bt + st / hz ))
+}
+ui_conf(){
+  local d
+  echo "# awg-self: домены UniFi резолвятся через $UI_DNS (через AWG). Файл создаёт /data/awg/self.sh, не редактировать."
+  for d in $UI_DOMAINS; do echo "server=/$d/$UI_DNS"; echo "ipset=/$d/$UISET"; done
+}
+restart_dnsmasq(){  # UniFi сам перезапускает dnsmasq; если нет — запускаем той же командой
+  local pid=$1 cmd i np
+  local last; last=$(cat $RESTF 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - last )) -lt 60 ] && return 0          # не чаще раза в минуту
+  date +%s > $RESTF
+  cmd=$(tr '\0' ' ' < /proc/$pid/cmdline)
+  log "перезапуск dnsmasq ($pid), чтобы подхватить $UIFILE"
+  kill "$pid" 2>/dev/null
+  for i in $(seq 1 15); do
+    sleep 1; np=$(dnsmasq_pid) && [ "$np" != "$pid" ] && return 0
+  done
+  log "UniFi не поднял dnsmasq за 15 с — запускаю сам: $cmd"
+  setsid $cmd </dev/null >/dev/null 2>&1 9>&- &
+  sleep 2
+}
+ui_dns(){  # держит файл в conf-dir dnsmasq и следит, что dnsmasq его загрузил
+  local pid dir f st mt
+  pid=$(dnsmasq_pid) || { log "не найден dnsmasq с --conf-dir — UI-модуль пропущен"; return 0; }
+  dir=$(conf_dir "$pid"); [ -d "$dir" ] || return 0
+  f="$dir/$UIFILE"
+  if ! ui_on; then
+    [ -f "$f" ] && { rm -f "$f"; restart_dnsmasq "$pid"; }
+    return 0
+  fi
+  [ "$(cat "$f" 2>/dev/null)" = "$(ui_conf)" ] || ui_conf > "$f"
+  st=$(pstart "$pid"); mt=$(stat -c %Y "$f")
+  [ -n "$st" ] && [ "$st" -lt "$mt" ] && restart_dnsmasq "$pid"   # dnsmasq старше файла → не видел его
+  return 0
+}
+
+build(){  # собрать цепочку целиком в ${CH}_NEW и подменить: рабочая цепочка ни на миг не бывает пустой
+  local w=$1 ep=$2 up=$3 T=${CH}_NEW O=${CH}_OLD n r
+  while iptables -t mangle -D OUTPUT -j $O 2>/dev/null; do :; done
+  iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
+  iptables -t mangle -N $T 2>/dev/null; iptables -t mangle -F $T
+  iptables -t mangle -A $T -m mark ! --mark 0x0/0x7e0000 -j RETURN
+  for n in $PRIV $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
+  if ui_on; then
+    iptables -t mangle -A $T -d "$UI_DNS" -j MARK --set-xmark "$MARK"
+    iptables -t mangle -A $T -d "$UI_DNS" -j RETURN
+    iptables -t mangle -A $T -m set --match-set $UISET dst -j MARK --set-xmark "$MARK"
+    iptables -t mangle -A $T -m set --match-set $UISET dst -j RETURN
+  fi
+  while read -r r; do  # как у UniFi: первое совпадение ставит метку и выходит
+    [ -n "$r" ] || continue
+    iptables -t mangle -A $T $r && iptables -t mangle -A $T ${r% -j MARK*} -j RETURN
+  done <<< "$w"
+  iptables -t mangle -S $CH >/dev/null 2>&1 && iptables -t mangle -E $CH $O
+  iptables -t mangle -E $T $CH
+  hook                                                   # переход на новую цепочку — первым
+  while iptables -t mangle -D OUTPUT -j $O 2>/dev/null; do :; done
+  iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
+}
+
+apply(){  # один проход за раз (служба, ручной apply, установщик); блокировка снимается по выходу из подоболочки
+  if command -v flock >/dev/null; then ( flock -w 30 9 || exit 0; apply_body ) 9>/run/awg-self.lock; else apply_body; fi
+  return 0
+}
+
+apply_body(){
+  load
+  [ -n "$TABLE" ] && [ -n "$MARK" ] || { echo "нет TABLE/MARK в awg.env"; return 0; }
+  local w ep up h ip
+  w=$(want); ep=$(endpoints); up=$(upstreams)
+  ui_on && ipset create $UISET hash:ip family inet -exist
+  h=$(printf 'v8\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
+  if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
+    build "$w" "$ep" "$up"
+    echo "$h" > $HASHF
+    for ip in $up; do unstick "$ip"; done
+  fi
+  legacy
+  hook
+  mss
+  ui_dns
+  return 0
+}
+
+legacy(){  # убрать «весь DNS роутера через AWG» из промежуточной версии
+  iptables -t mangle -S AWG_SELF_DNS >/dev/null 2>&1 || return 0
+  local ip wip; wip=$(wanip)
+  iptables -t mangle -F AWG_SELF_DNS; iptables -t mangle -X AWG_SELF_DNS 2>/dev/null
+  for ip in $(cut -s -d' ' -f2- /tmp/awg-self.dns 2>/dev/null); do
+    ss -K dst "$ip" >/dev/null 2>&1; [ -n "$wip" ] && conntrack -D -s "$wip" -d "$ip" >/dev/null 2>&1
+  done
+  rm -f /tmp/awg-self.dns /tmp/awg-self.dnsips
+}
+
+# ---------- проверки ----------
+inset(){  # адрес в наборе? (UBIOS_* — list:set, проверяем участников)
+  local s=$1 d=$2 m
+  if ipset list -t "$s" 2>/dev/null | grep -q 'Type: list:set'; then
+    for m in $(ipset list "$s" 2>/dev/null | sed -n '/^Members:/,$p' | tail -n +2); do
+      ipset test "$m" "$d" >/dev/null 2>&1 && return 0
+    done
+    return 1
+  fi
+  ipset test "$s" "$d" >/dev/null 2>&1
+}
+chain_sets(){ iptables -t mangle -S $CH 2>/dev/null | awk '/-j MARK/{for(i=1;i<=NF;i++) if($i=="--match-set") print $(i+1)}' | sort -u; }
+in_pbr(){  # уйдёт ли соединение роутера к адресу в AWG
+  local s
+  iptables -t mangle -S $CH 2>/dev/null | grep -q -- "-d $1/32 -j MARK" && return 0
+  iptables -t mangle -S $CH 2>/dev/null | grep -q -- "-d $1/32 -j RETURN" && return 1   # исключён (VPS, DNS роутера)
+  for s in $(chain_sets); do inset "$s" "$1" && return 0; done
+  return 1
+}
+
+reconnect(){
+  load
+  local wip d n=0
+  wip=$(wanip)
+  [ -n "$wip" ] || { echo "не найден адрес на $WANIF"; return 1; }
+  for d in $(conntrack -L -s "$wip" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^dst=/){print substr($i,5); break}}' | sort -u); do
+    iptables -t mangle -C $CH -d "$d" -j RETURN 2>/dev/null && ! iptables -t mangle -C $CH -d "$d" -j MARK --set-xmark "$MARK" 2>/dev/null && continue
+    conntrack -L -s "$wip" -d "$d" 2>/dev/null | grep -q 'dst=10\.8\.1\.' && continue   # уже через AWG
+    if in_pbr "$d" && ip route get "$d" mark "${MARK%/*}" 2>/dev/null | grep -q 'dev awg'; then
+      ss -K dst "$d" >/dev/null 2>&1
+      conntrack -D -s "$wip" -d "$d" >/dev/null 2>&1
+      echo "переподключение: $d"; n=$((n+1))
+    fi
+  done
+  echo "оборвано направлений: $n"
+}
+
+remove(){
+  load
+  local i m pid dir
+  for c in $CH ${CH}_OLD ${CH}_NEW; do
+    while iptables -t mangle -D OUTPUT -j $c 2>/dev/null; do :; done
+    iptables -t mangle -F $c 2>/dev/null; iptables -t mangle -X $c 2>/dev/null
+  done
+  for i in $MAIN $BACKUP; do
+    iptables -t mangle -D POSTROUTING -o "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+    m=$(cat /sys/class/net/$i/mtu 2>/dev/null) && iptables -t mangle -D PREROUTING -i "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss $((m-40)) 2>/dev/null
+  done
+  legacy
+  if pid=$(dnsmasq_pid); then
+    dir=$(conf_dir "$pid")
+    if [ -f "$dir/$UIFILE" ]; then rm -f "$dir/$UIFILE"; rm -f $RESTF; restart_dnsmasq "$pid"; fi
+  fi
+  ipset destroy $UISET 2>/dev/null
+  rm -f $HASHF $UPF
+}
+
+check(){
+  load
+  local rc=0 n wip ok d c fw ips code pid dir st mt up
+  if [ "$(iptables -t mangle -S OUTPUT | grep '^-A OUTPUT' | head -n1)" = "-A OUTPUT -j $CH" ]; then echo "OK     цепочка $CH стоит первой в mangle OUTPUT"
+  else echo "FAIL   переход в $CH не первый в mangle OUTPUT (служба awg-self запущена?)"; rc=1; fi
+  n=$(pgrep -fc 'self\.sh run' 2>/dev/null || echo 0)
+  [ "$n" -gt 1 ] && { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(pgrep -f 'self\.sh run' | tr '\n' ' ')"; }
+  [ "$(iptables -t mangle -S $CH 2>/dev/null | grep -c -- ' -j MARK ')" -gt "$(( $(want | grep -c .) + 2 ))" ] && echo "WARN   в $CH есть дубли правил (выполните apply)"
+  n=$(want | grep -c .)
+  echo "INFO   правил PBR UniFi (без Kill Switch), повторённых для роутера: $n"
+  iptables -t mangle -S AWG_SELF_DNS >/dev/null 2>&1 && echo "WARN   осталась цепочка AWG_SELF_DNS от старой версии (выполните apply)"
+  echo "INFO   таблица $TABLE: $(ip route show table "$TABLE" | head -n1)"
+  local u ubad=""; wip=$(wanip)
+  for u in $(cat $UPF 2>/dev/null); do conntrack -L -s "$wip" -d "$u" 2>/dev/null | grep -q 'dst=10\.8\.1\.' && ubad="$ubad $u"; done
+  if [ -n "$ubad" ]; then echo "FAIL   общий DNS роутера идёт через AWG:$ubad (должен идти через $WANIF)"; rc=1
+  else echo "OK     общий DNS роутера ($(cat $UPF 2>/dev/null | tr '\n' ' '| sed 's/ $//')) идёт мимо туннеля, через $WANIF"; fi
+
+  if ui_on; then
+    pid=$(dnsmasq_pid); dir=$(conf_dir "$pid")
+    if [ -f "$dir/$UIFILE" ]; then
+      st=$(pstart "$pid"); mt=$(stat -c %Y "$dir/$UIFILE")
+      if [ "$st" -ge "$mt" ]; then echo "OK     dnsmasq загрузил $dir/$UIFILE: $UI_DOMAINS → $UI_DNS"
+      else echo "FAIL   dnsmasq запущен раньше, чем появился $UIFILE (служба перезапустит его в течение минуты)"; rc=1; fi
+    else echo "FAIL   нет $dir/$UIFILE (служба awg-self запущена?)"; rc=1; fi
+    up=$(grep -rhE '^server=[0-9]' "$(dirname "$(tr '\0' '\n' < /proc/$pid/cmdline | sed -n 's/^--conf-file=//p')")" "$dir" 2>/dev/null | cut -d= -f2 | cut -d'#' -f1 | sort -u | tr '\n' ' ')
+    echo " $up " | grep -q " $UI_DNS " && { echo "FAIL   $UI_DNS — это общий DNS роутера: через туннель уйдёт весь DNS. Задайте другой UI_DNS"; rc=1; }
+    if in_pbr "$UI_DNS"; then echo "OK     запросы к $UI_DNS идут через AWG ($(ip route get "$UI_DNS" mark "${MARK%/*}" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'))"
+    else echo "FAIL   запросы к $UI_DNS не маркируются"; rc=1; fi
+    echo "INFO   адресов облака в $UISET: $(ipset list $UISET 2>/dev/null | sed -n '/^Members:/,$p' | tail -n +2 | grep -c .)"
+  else
+    echo "INFO   UI-модуль выключен (UI_FIX=$UI_FIX)"
+    fw=$(grep -rhoE 'server=/([a-z0-9.-]*/)*ui\.com/[^/]*/?[0-9.]+' /run/dnsmasq.dns.conf.d /run/dnsmasq.dhcp.conf.d 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+    [ -n "$fw" ] && echo "INFO   есть Forward Domain ui.com из UniFi → $fw"
+  fi
+
+  ips=$(getent ahostsv4 unifi.ui.com 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+  if [ -z "$ips" ]; then echo "FAIL   unifi.ui.com не резолвится"; rc=1
+  else  # заглушка определяется по ответу (451), а не по списку адресов: Ubiquiti меняет её IP
+    local bad="" ip c2
+    for ip in $ips; do
+      c2=$(curl -s -o /dev/null -m 8 --resolve "unifi.ui.com:443:$ip" -w '%{http_code}' https://unifi.ui.com/ 2>/dev/null)
+      [ "$c2" = 451 ] && bad="$bad $ip"
+    done
+    if [ -n "$bad" ]; then echo "FAIL   unifi.ui.com →$bad — заглушка 451 (geo-DNS); кэш? killall -HUP dnsmasq"; rc=1
+    else echo "OK     unifi.ui.com → $ips(не заглушка)"; fi
+  fi
+
+  wip=$(wanip)
+  ok=$(conntrack -L -s "$wip" 2>/dev/null | grep -c 'dst=10\.8\.1\.')
+  echo "INFO   соединений роутера через AWG сейчас: $ok"
+  for d in $(ss -tn state established 2>/dev/null | awk 'NR>1{print $4}' | sed -E 's/^\[::ffff://; s/\]?:[0-9]+$//' | grep -E '^[0-9.]+$' | grep -v -E '^(192\.168|127\.|10\.)' | sort -u); do
+    c=$(conntrack -L -s "$wip" -d "$d" 2>/dev/null | head -n1)
+    if echo "$c" | grep -q 'dst=10\.8\.1\.'; then echo "OK     $d → через AWG ($(proc_of "$d"))"
+    elif [ -n "$c" ]; then
+      if grep -qxF "$d" "$UPF" 2>/dev/null; then echo "INFO   $d → DNS роутера, напрямую через $WANIF ($(proc_of "$d")) — так и задумано"
+      elif in_pbr "$d"; then echo "WARN   $d → должно идти через AWG, но идёт напрямую через $WANIF ($(proc_of "$d")): старое соединение, нужен reconnect"
+      else echo "INFO   $d → не в списках, напрямую через $WANIF ($(proc_of "$d")) — так и задумано"; fi
+    fi
+  done
+  return $rc
+}
+
+case "${1:-run}" in
+  run)       trap 'exit 0' TERM INT; while :; do apply; sleep 5 & wait $!; done;;
+  apply)     apply;;
+  reconnect) reconnect;;
+  remove)    remove;;
+  check)     check;;
+  status)    iptables -t mangle -L $CH -v -n --line-numbers; iptables -t mangle -S OUTPUT; ipset list $UISET 2>/dev/null | head -20;;
+  *)         echo "использование: $0 [run|apply|reconnect|remove|check|status]"; exit 1;;
+esac
+EOF_SELF
+chmod +x "$DD/self.sh.new" && mv -f "$DD/self.sh.new" "$DD/self.sh"
+
+cat > "$DD/awg-self.service" <<'EOF_UNIT'
+[Unit]
+Description=AWG: own router traffic follows UniFi PBR into the tunnel; unifi.ui.com via AWG DNS
+After=awg-failover.service network-online.target
+
+[Service]
+ExecStart=/data/awg/self.sh run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+
+if ! grep -q '^UI_FIX=' "$DD/awg.env"; then
+  cat >> "$DD/awg.env" <<'EOF_ENV'
+# --- awg-self: unifi.ui.com через туннель (UI_FIX=no — выключить) ---
+UI_FIX=yes
+UI_DOMAINS="ui.com"
+UI_DNS=9.9.9.9
+EOF_ENV
+  echo "в awg.env добавлены UI_FIX / UI_DOMAINS / UI_DNS"
+fi
+
+cp "$DD/awg-self.service" /etc/systemd/system/awg-self.service
+systemctl daemon-reload
+systemctl enable awg-self >/dev/null 2>&1
+systemctl restart awg-self
+echo "awg-self запущен, жду применения правил и перезапуска dnsmasq…"
+sleep 15
+"$DD/self.sh" reconnect
+sleep 5
+echo; "$DD/self.sh" check
+echo
+echo "Если в UniFi вручную создан Forward Domain ui.com или PBR для 9.9.9.9 — их можно удалить: служба делает то же самое сама."
+}
+main "$@" </dev/null
+EOF
+chmod 700 /root/awg-ui-fix.sh
+```
+
+### 11.2 Проверьте
+
+**Роутер**
+
+```bash
+/data/awg/self.sh check
+```
+
+*Вывод — главное в выводе*
+
+```text
+OK     цепочка AWG_SELF стоит первой в mangle OUTPUT
+OK     общий DNS роутера (…) идёт мимо туннеля, через ppp0
+OK     dnsmasq загрузил /run/dnsmasq.dhcp.conf.d//zz-awg-ui.conf: ui.com → 9.9.9.9
+OK     запросы к 9.9.9.9 идут через AWG (awgmain)
+OK     unifi.ui.com → … (не заглушка)
+```
+
+> [!TIP]
+> **Проверка**
+>
+> Откройте unifi.ui.com: консоль роутера должна быть онлайн. Если в выводе есть «старое соединение, нужен reconnect», выполните `/data/awg/self.sh reconnect`.
+
+### 11.3 Настройки и удаление
+
+Параметры в `/data/awg/awg.env`: `UI_FIX=yes|no`, `UI_DOMAINS="ui.com"`, `UI_DNS=9.9.9.9`. После правки служба подхватит их сама за 5 секунд. После обновления прошивки службу возвращает `awg-restore.sh`.
+
+**Роутер** · проверка и удаление через тот же скрипт
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) check
+bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) uninstall
+```
+
+> [!WARNING]
+> **Если Telegram в ваших правилах PBR «для всех»**
+>
+> Тогда awg-self ведёт и уведомления роутера в туннель. Когда лежат оба туннеля, запасная отправка через провайдера не пройдёт, и сообщение отправится из очереди после восстановления.
+
 <a name="p11"></a>
 
-## 11. Обслуживание
+## 12. Обслуживание
 
 ### После обновления прошивки UniFi
 
-Обновление может очистить `/etc/systemd/system` и `/root/.bashrc`. Скрипт восстановления вы создали в шаге 5.5. После обновления выполните `/data/awg/awg-restore.sh`, затем проверьте `/data/awg/audit.sh` (если ставили часть 9) или `systemctl is-active awg-failover`. Если UniFi пересоздал профиль VPN Client, а метка или таблица поменялись, сначала `/data/awg/awg-detect.sh`, затем `systemctl restart awg-failover`. Если после крупного обновления UniFi перестанет создавать PBR-правило с меткой, схема работать не будет: проверьте `ip rule show | grep fwmark`.
+Обновление может очистить `/etc/systemd/system` и `/root/.bashrc`. Скрипт восстановления вы создали в шаге 5.5. После обновления выполните `/data/awg/awg-restore.sh` (он вернёт и службы `awg-subnets` и `awg-self`, если они стояли) или `/data/awg/install.sh --restore`, затем проверьте `/data/awg/audit.sh` (если ставили часть 9) или `systemctl is-active awg-failover`. Если UniFi пересоздал профиль VPN Client, а метка или таблица поменялись, сначала `/data/awg/awg-detect.sh`, затем `systemctl restart awg-failover`. Если после крупного обновления UniFi перестанет создавать PBR-правило с меткой, схема работать не будет: проверьте `ip rule show | grep fwmark`.
 
 ### Частые операции
 
@@ -2036,8 +2645,16 @@ cat > /data/awg/awg-uninstall.sh <<'EOF'
 #   awg-uninstall.sh          остановить и убрать службы, маршруты, правила, интерфейсы
 #   awg-uninstall.sh --purge  то же + удалить /data/awg (конфиги с ключами тоже!)
 D=/data/awg
+iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
 [ -r $D/awg.env ] && . $D/awg.env
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}
+# сначала службы поверх сторожа: awg-self (метки трафика роутера, файл dnsmasq) и awg-subnets (ip rule подсетей)
+for u in awg-self awg-subnets; do
+  systemctl disable --now $u 2>/dev/null
+  rm -f /etc/systemd/system/$u.service
+done
+[ -x $D/self.sh ] && $D/self.sh remove >/dev/null 2>&1
+[ -x $D/subnets.sh ] && $D/subnets.sh remove >/dev/null 2>&1
 for u in awg-notify awg-failover awg-motd; do
   systemctl disable --now $u 2>/dev/null
   rm -f /etc/systemd/system/$u.service
@@ -2053,6 +2670,7 @@ for i in $MAIN $BACKUP; do
   while iptables -D FORWARD -i $i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
   ip link del $i 2>/dev/null
 done
+pkill -f "^\./amneziawg-go |/amneziawg-go " 2>/dev/null   # демоны туннелей (при KillMode=process они не входят в службу)
 for s in $EXTRA_SUBNETS; do ipset del UBIOS4local_network $s 2>/dev/null; done
 sed -i '/AWGS_SHOWN/d;/alias awgs=/d;/alias awg-audit=/d;/alias awg-setup=/d' /root/.bashrc 2>/dev/null
 rm -f /root/.hushlogin
@@ -2063,32 +2681,35 @@ EOF
 chmod 755 /data/awg/awg-uninstall.sh
 ```
 
-`/data/awg/awg-uninstall.sh` убирает службы, маршруты, правила iptables, интерфейсы и строки в `.bashrc`, возвращает баннер. С ключом `--purge` удаляет и `/data/awg` вместе с конфигами. Профиль-рельсу и правила PBR удалите в UniFi вручную, **сначала правила**: пока правило ссылается на рельсу без AWG-маршрута, его устройства остаются без интернета. На VPS: `systemctl disable --now awg-server; rm -rf /etc/amnezia /etc/systemd/system/awg-server.service /usr/local/bin/awg-up.sh`.
+`/data/awg/awg-uninstall.sh` сначала убирает `awg-self` и `awg-subnets`, затем остальные службы, маршруты, правила iptables, интерфейсы и строки в `.bashrc`, возвращает баннер. С ключом `--purge` удаляет и `/data/awg` вместе с конфигами. Профиль-рельсу и правила PBR удалите в UniFi вручную, **сначала правила**: пока правило ссылается на рельсу без AWG-маршрута, его устройства остаются без интернета. На VPS: `systemctl disable --now awg-server; rm -rf /etc/amnezia /etc/systemd/system/awg-server.service /usr/local/bin/awg-up.sh`.
 
 <a name="p12"></a>
 
-## 12. Диагностика и проблемы
+## 13. Диагностика и проблемы
 
 Всё ниже случилось на самом деле, пока собиралась эта схема. Таблица экономит часы: найдите свой симптом.
 
-| Симптом                                                                                       | Причина                                                                      | Что делать                                                                                                                                                       |
-|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Handshake прошёл, 4–5 пингов, потом тишина в обе стороны через 5–8 с. Смена порта не помогает | DPI распознаёт WireGuard и рубит поток                                       | AmneziaWG вместо WireGuard. Подтвердить можно тестом ниже                                                                                                        |
-| На сервере `tcpdump` пуст, роутер шлёт handshake по 148 байт                                  | Порт закрыт у хостера или в ufw, неверный IP или порт                        | Файрвол хостера, `ufw status`, Endpoint в конфиге                                                                                                                |
-| Пакеты до сервера доходят, ответа (92 байта) нет                                              | Сервер не знает ключ клиента: peer не загружен или ключи перепутаны          | `awg show awg0` на сервере: peer с публичным ключом роутера и `allowed ips`. Через WireGuard-inbound 3x-ui так и было                                            |
-| Handshake есть, ping через туннель не идёт, сайты открываются                                 | ICMP режется у оператора или в его цепочке                                   | Не поломка. Сторож проверяет по HTTPS                                                                                                                            |
-| Handshake есть, трафика из интернета через свой VPS нет                                       | Нет `ip_forward` или NAT на сервере                                          | `/root/audit-server.sh`                                                                                                                                          |
-| `awg setconf`: `Line unrecognized`                                                            | Бинарник не знает параметр конфига                                           | Свежая сборка или конфиг без новых параметров                                                                                                                    |
-| Устройства под PBR без интернета                                                              | Сторож не работает, или в `awg.env` не та таблица/метка (профиль пересоздан) | `systemctl status awg-failover`, `tail /data/awg/failover.log`, `awgs` (часть 8); если профиль пересоздавали: `awg-detect.sh` и `systemctl restart awg-failover` |
-| В туннель ушли и устройства вне PBR                                                           | Правило по подсети вместо метки (так выглядела наша первая версия)           | `ip rule show`: лишних правил с приоритетом меньше 32504 быть не должно; `awg-audit` (часть 9)                                                                   |
-| Оба канала нестабильны, endpoint «прыгает»                                                    | Один ключ на двух устройствах                                                | Отдельный конфиг для роутера, старый клиент выключить                                                                                                            |
-| Дубли правил NAT/FORWARD, третий процесс `amneziawg-go`                                       | Два экземпляра сторожа или старая служба                                     | `awg-audit` (часть 9) и его подсказки                                                                                                                            |
-| Имитация сбоя правилом iptables «сама пропала»                                                | UniFi пересобирает свои цепочки                                              | Флаг `/tmp/awg-sim-down`                                                                                                                                         |
-| После `wg-quick down/up` пропали маршруты                                                     | Интерфейс пересоздан, ядро удаляет привязанные к нему маршруты               | Сторож восстанавливает маршрут за 5 с                                                                                                                            |
-| Скрипт сервера выполнился на роутере                                                          | Перепутали окно SSH                                                          | Смотрите на приглашение; серверные скрипты гайда на роутере не запускаются                                                                                       |
-| Баннер UniFi не убирается настройкой sshd                                                     | Он печатается из `/etc/motd`                                                 | Шаг 8.3                                                                                                                                                          |
-| После обновления прошивки нет панели и автозапуска                                            | Очищены `/etc` и `.bashrc`                                                   | `/data/awg/awg-restore.sh` (шаг 5.5)                                                                                                                             |
-| Telegram: в логе 409 Conflict                                                                 | Тот же бот читается другой программой (например, 3x-ui)                      | Отдельный бот для роутера                                                                                                                                        |
+| Симптом                                                                                            | Причина                                                                                                                                   | Что делать                                                                                                                                                       |
+|----------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Handshake прошёл, 4–5 пингов, потом тишина в обе стороны через 5–8 с. Смена порта не помогает      | DPI распознаёт WireGuard и рубит поток                                                                                                    | AmneziaWG вместо WireGuard. Подтвердить можно тестом ниже                                                                                                        |
+| На сервере `tcpdump` пуст, роутер шлёт handshake по 148 байт                                       | Порт закрыт у хостера или в ufw, неверный IP или порт                                                                                     | Файрвол хостера, `ufw status`, Endpoint в конфиге                                                                                                                |
+| Пакеты до сервера доходят, ответа (92 байта) нет                                                   | Сервер не знает ключ клиента: peer не загружен или ключи перепутаны                                                                       | `awg show awg0` на сервере: peer с публичным ключом роутера и `allowed ips`. Через WireGuard-inbound 3x-ui так и было                                            |
+| Handshake есть, ping через туннель не идёт, сайты открываются                                      | ICMP режется у оператора или в его цепочке                                                                                                | Не поломка. Сторож проверяет по HTTPS                                                                                                                            |
+| Handshake есть, трафика из интернета через свой VPS нет                                            | Нет `ip_forward` или NAT на сервере                                                                                                       | `/root/audit-server.sh`                                                                                                                                          |
+| `awg setconf`: `Line unrecognized`                                                                 | Бинарник не знает параметр конфига                                                                                                        | Свежая сборка или конфиг без новых параметров                                                                                                                    |
+| Устройства под PBR без интернета                                                                   | Сторож не работает, или в `awg.env` не та таблица/метка (профиль пересоздан)                                                              | `systemctl status awg-failover`, `tail /data/awg/failover.log`, `awgs` (часть 8); если профиль пересоздавали: `awg-detect.sh` и `systemctl restart awg-failover` |
+| В туннель ушли и устройства вне PBR                                                                | Правило по подсети вместо метки (так выглядела наша первая версия)                                                                        | `ip rule show`: лишних правил с приоритетом меньше 32504 быть не должно; `awg-audit` (часть 9)                                                                   |
+| Оба канала нестабильны, endpoint «прыгает»                                                         | Один ключ на двух устройствах                                                                                                             | Отдельный конфиг для роутера, старый клиент выключить                                                                                                            |
+| Дубли правил NAT/FORWARD, третий процесс `amneziawg-go`                                            | Два экземпляра сторожа или старая служба                                                                                                  | `awg-audit` (часть 9) и его подсказки                                                                                                                            |
+| Копии правил NAT, FORWARD и MSS на awg-интерфейсах растут со временем (десятки за несколько часов) | iptables на UDR7 — legacy: без ключа `-w` команда не ждёт блокировку, проверка «есть ли правило» ошибается, и правило добавляется ещё раз | Скрипты версии 1.1.1+ ждут блокировку сами: `/data/awg/install.sh --update`. Накопившиеся копии уберёт перезагрузка роутера                                      |
+| unifi.ui.com: «Access Prohibited», HTTP 451                                                        | geo-DNS Ubiquiti отдаёт роутеру адрес заглушки                                                                                            | Часть 11 (`awg-ui-fix.sh`), проверка: `/data/awg/self.sh check`                                                                                                  |
+| Клиенты Teleport выходят не через туннель                                                          | Служба `awg-subnets` не запущена или подсеть не указана                                                                                   | `/data/awg/subnets.sh check` при подключённом клиенте (часть 7)                                                                                                  |
+| Имитация сбоя правилом iptables «сама пропала»                                                     | UniFi пересобирает свои цепочки                                                                                                           | Флаг `/tmp/awg-sim-down`                                                                                                                                         |
+| После `wg-quick down/up` пропали маршруты                                                          | Интерфейс пересоздан, ядро удаляет привязанные к нему маршруты                                                                            | Сторож восстанавливает маршрут за 5 с                                                                                                                            |
+| Скрипт сервера выполнился на роутере                                                               | Перепутали окно SSH                                                                                                                       | Смотрите на приглашение; серверные скрипты гайда на роутере не запускаются                                                                                       |
+| Баннер UniFi не убирается настройкой sshd                                                          | Он печатается из `/etc/motd`                                                                                                              | Шаг 8.3                                                                                                                                                          |
+| После обновления прошивки нет панели и автозапуска                                                 | Очищены `/etc` и `.bashrc`                                                                                                                | `/data/awg/awg-restore.sh` (шаг 5.5)                                                                                                                             |
+| Telegram: в логе 409 Conflict                                                                      | Тот же бот читается другой программой (например, 3x-ui)                                                                                   | Отдельный бот для роутера                                                                                                                                        |
 
 <a name="hs"></a>
 
@@ -2162,7 +2783,7 @@ EOF
 
 <a name="p13"></a>
 
-## 13. Справочник
+## 14. Справочник
 
 ### Файлы на роутере (`/data/awg`)
 
@@ -2175,12 +2796,14 @@ EOF
 | `up.sh`                                                               | Поднять туннель(и): `up.sh [awgmain|awgbackup]`                                                 | 4     |
 | `failover.sh`, `failover.log`                                         | Сторож и его журнал (~1000 строк)                                                               | 5     |
 | `awg-failover.service`                                                | Копия юнита для восстановления                                                                  | 5     |
+| `subnets.sh`, `awg-subnets.service`                                   | Клиенты VPN-сервера роутера через туннель (правила 6100/6101)                                   | 7     |
 | `status.sh`                                                           | Панель `awgs`                                                                                   | 8     |
 | `awg-motd.service`, `motd.orig`                                       | Очистка баннера, оригинал баннера                                                               | 8     |
 | `audit.sh`                                                            | Аудит `awg-audit`                                                                               | 9     |
 | `telegram.env` 🔒, `notify.sh`, `awg-notify.sh`, `awg-notify.service` | Уведомления; `notify.log`, `notify.spool`, `notify.events`, `notify.state` — их служебные файлы | 10    |
+| `self.sh`, `awg-self.service`                                         | Site Manager и собственный трафик роутера через AWG (ставит `awg-ui-fix.sh`)                    | 11    |
 | `awg-restore.sh`                                                      | Восстановление автозапуска после обновления прошивки                                            | 5     |
-| `awg-uninstall.sh`                                                    | Полное удаление                                                                                 | 11    |
+| `awg-uninstall.sh`                                                    | Полное удаление                                                                                 | 12    |
 | `install.sh`, `install.log`, `.installer`, `.panel`, `.audit`         | Установщик и его журнал; отметки компонентов, выбранных в установщике                           | ⚡    |
 
 ### Файлы на VPS
@@ -2195,14 +2818,15 @@ EOF
 
 ### Параметры `awg.env`
 
-| Параметр                           | Пример                                        | Смысл                                                         |
-|------------------------------------|-----------------------------------------------|---------------------------------------------------------------|
-| `TABLE`, `MARK`, `PRIO`, `RAIL_IF` | `178`, `0x6a0000/0x7e0000`, `32504`, `wgclt1` | Находит `awg-detect.sh`; руками не правятся                   |
-| `WANIF`                            | `eth3`                                        | WAN-интерфейс для панели и диагностики                        |
-| `MAIN`, `BACKUP`                   | `awgmain`, `awgbackup` или пусто              | Имена туннелей; пустой `BACKUP` означает режим одного туннеля |
-| `RECOVER_SEC`                      | `600`                                         | Сколько основной должен работать без сбоев до возврата        |
-| `EXTRA_SUBNETS`                    | `"192.168.3.0/24"`                            | Подсети VPN-сервера роутера для PBR                           |
-| `VPS_IP`                           | `203.0.113.10`                                | Только для подсказок в панели                                 |
+| Параметр                           | Пример                                        | Смысл                                                                                  |
+|------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------|
+| `TABLE`, `MARK`, `PRIO`, `RAIL_IF` | `178`, `0x6a0000/0x7e0000`, `32504`, `wgclt1` | Находит `awg-detect.sh`; руками не правятся                                            |
+| `WANIF`                            | `eth3`                                        | WAN-интерфейс для панели и диагностики                                                 |
+| `MAIN`, `BACKUP`                   | `awgmain`, `awgbackup` или пусто              | Имена туннелей; пустой `BACKUP` означает режим одного туннеля                          |
+| `RECOVER_SEC`                      | `600`                                         | Сколько основной должен работать без сбоев до возврата                                 |
+| `EXTRA_SUBNETS`                    | `"192.168.2.0/24"`                            | Подсети VPN-сервера роутера, которые целиком идут через туннель (служба `awg-subnets`) |
+| `UI_FIX`, `UI_DOMAINS`, `UI_DNS`   | `yes`, `"ui.com"`, `9.9.9.9`                  | Site Manager через туннель (часть 11); `UI_FIX=no` — выключить                         |
+| `VPS_IP`                           | `203.0.113.10`                                | Только для подсказок в панели                                                          |
 
 ### Адреса и числа по умолчанию
 
