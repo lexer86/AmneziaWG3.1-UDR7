@@ -2494,8 +2494,13 @@ def do_rt(v):
     send('⏰ Суточный отчёт: &lt;b&gt;%s&lt;/b&gt;.%s' % (rt_label(v), ' Получить отчёт можно кнопкой «📊 Отчёт».' if v == 'off' else ''), menu_kb())
 
 
+HELP = ('Команды (можно с именем роутера: &lt;code&gt;/status %s&lt;/code&gt;):\n'
+        '/menu — кнопки · /status · /report · /log · /ip · /check\n'
+        '/main · /backup · /auto · /stop · /start_all · /reporttime 0930|off')
+
+
 def do_menu():
-    send('&lt;b&gt;Управление&lt;/b&gt; · ' + esc(mode_line()) + '\nАктивный канал: &lt;b&gt;%s&lt;/b&gt;' % (active() or 'нет'), menu_kb())
+    send('&lt;b&gt;Управление&lt;/b&gt; · ' + esc(mode_line()) + '\nАктивный канал: &lt;b&gt;%s&lt;/b&gt;\n\n' % (active() or 'нет') + HELP % esc(TAG), menu_kb())
 
 
 def do_confirm(action):
@@ -2548,7 +2553,7 @@ def handle_message(m):
     targets = [a.lstrip('#') for a in args if not re.match(r'^(\d{4}|off)$', a)]
     if targets and not any(t.lower() in (TAG.lower(), 'all', 'все') for t in targets):
         return   # команда другому роутеру
-    if cmd in ('start', 'help'):
+    if cmd in ('start', 'help', 'list', 'commands'):
         cmd = 'menu'
     if cmd in INFO_CMDS:
         bg(cmd)
@@ -2635,7 +2640,7 @@ def main():
 if __name__ == '__main__':
     main()
 EOF
-chmod 700 /data/awg/bot.py</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 450 строк">Показать целиком · 450 строк</button></figure>
+chmod 700 /data/awg/bot.py</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 455 строк">Показать целиком · 455 строк</button></figure>
 <figure class="cb"><figcaption><span class="on on-router">Роутер</span><span class="cbt">служба и первое меню</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>cat &gt; /data/awg/awg-bot.service &lt;&lt;'EOF'
 [Unit]
 Description=AWG: Telegram bot (status, report, switching and stopping channels)

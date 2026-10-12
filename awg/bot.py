@@ -305,8 +305,13 @@ def do_rt(v):
     send('⏰ Суточный отчёт: <b>%s</b>.%s' % (rt_label(v), ' Получить отчёт можно кнопкой «📊 Отчёт».' if v == 'off' else ''), menu_kb())
 
 
+HELP = ('Команды (можно с именем роутера: <code>/status %s</code>):\n'
+        '/menu — кнопки · /status · /report · /log · /ip · /check\n'
+        '/main · /backup · /auto · /stop · /start_all · /reporttime 0930|off')
+
+
 def do_menu():
-    send('<b>Управление</b> · ' + esc(mode_line()) + '\nАктивный канал: <b>%s</b>' % (active() or 'нет'), menu_kb())
+    send('<b>Управление</b> · ' + esc(mode_line()) + '\nАктивный канал: <b>%s</b>\n\n' % (active() or 'нет') + HELP % esc(TAG), menu_kb())
 
 
 def do_confirm(action):
@@ -359,7 +364,7 @@ def handle_message(m):
     targets = [a.lstrip('#') for a in args if not re.match(r'^(\d{4}|off)$', a)]
     if targets and not any(t.lower() in (TAG.lower(), 'all', 'все') for t in targets):
         return   # команда другому роутеру
-    if cmd in ('start', 'help'):
+    if cmd in ('start', 'help', 'list', 'commands'):
         cmd = 'menu'
     if cmd in INFO_CMDS:
         bg(cmd)
