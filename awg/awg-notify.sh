@@ -250,7 +250,7 @@ daemon() {
   for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
   sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
-  if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, вотчдог: запущен"; else t="🟢 Вотчдог: awg-notify перезапущен"; fi
+  if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, вотчдог запущен"; else t="🟢 Вотчдог awg-notify перезапущен"; fi
   send "<b>$t</b>"$'\n'"<pre>$(snapshot | esc)</pre>"
   tail -n0 -F "$LOGF" 2>/dev/null | while IFS= read -r l; do on_line "$l"; done
 }

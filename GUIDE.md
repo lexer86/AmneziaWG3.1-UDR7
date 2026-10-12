@@ -2226,7 +2226,7 @@ daemon() {
   for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
   sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
-  if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, вотчдог: запущен"; else t="🟢 Вотчдог: awg-notify перезапущен"; fi
+  if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, вотчдог запущен"; else t="🟢 Вотчдог awg-notify перезапущен"; fi
   send "<b>$t</b>"$'\n'"<pre>$(snapshot | esc)</pre>"
   tail -n0 -F "$LOGF" 2>/dev/null | while IFS= read -r l; do on_line "$l"; done
 }
@@ -2292,7 +2292,7 @@ systemctl daemon-reload
 systemctl enable --now awg-notify
 ```
 
-Через ~20 секунд придёт «Вотчдог: awg-notify перезапущен». В сценарии C проверьте событие: `touch /tmp/awg-sim-down`, через 15–20 секунд придёт «Переключение», затем `rm /tmp/awg-sim-down` и через 10 минут «Возврат».
+Через ~20 секунд придёт «Вотчдог awg-notify перезапущен». В сценарии C проверьте событие: `touch /tmp/awg-sim-down`, через 15–20 секунд придёт «Переключение», затем `rm /tmp/awg-sim-down` и через 10 минут «Возврат».
 
 Если роутер выключится целиком, сообщить об этом будет некому. Для такого случая нужен внешний мониторинг (например, healthchecks.io с пингом раз в 5 минут).
 
