@@ -3,10 +3,10 @@
   <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=2" width="100%">
 </picture>
 
-<a href="https://lexer86.github.io/AmneziaWG3.1-UDR7/">
+<a href="GUIDE.md">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/guide-dark.svg">
-    <img alt="Открыть гайд: lexer86.github.io/AmneziaWG3.1-UDR7" src="assets/readme/guide-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/guide-dark.svg?v=2">
+    <img alt="Открыть гайд: GUIDE.md, пошаговый мануал" src="assets/readme/guide-light.svg?v=2">
   </picture>
 </a>
 
@@ -98,7 +98,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 | Доступ к Site Manager (unifi.ui.com) | `/data/awg/self.sh check` |
 | Журнал переключений | `tail -n 30 /data/awg/failover.log` |
 
-Разбор типовых проблем — в части 12 гайда, [«Диагностика и проблемы»](https://lexer86.github.io/AmneziaWG3.1-UDR7/#p12).
+Разбор типовых проблем — в части 12 гайда, [«Диагностика и проблемы»](GUIDE.md#p12).
 
 ## 📁 Структура
 
