@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg">
-  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=2">
+  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=2" width="100%">
 </picture>
 
 <a href="https://lexer86.github.io/AmneziaWG3.1-UDR7/">
