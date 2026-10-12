@@ -1688,7 +1688,7 @@ grep -q "alias awg-audit=" /root/.bashrc 2&gt;/dev/null || echo "alias awg-audit
 read -rp "Ваш chat id: " C
 printf 'TG_TOKEN=%s\nTG_CHAT=%s\n' "$T" "$C" &gt; /data/awg/telegram.env
 chmod 600 /data/awg/telegram.env; unset T C</code></pre></figure>
-    <p>Дополнительно в этот файл можно дописать <code>REPORT_TIME=0830</code> (время отчёта) и <code>TG_NO_WAN=1</code> (не слать напрямую через провайдера).</p>
+    <p>Дополнительно в этот файл можно дописать <code>ROUTER_NAME="DR7"</code> (имя роутера: оно стоит первой строкой каждого сообщения как хэштег <code>#DR7</code>, по нему в одном чате различаются несколько роутеров; без него берётся <code>hostname</code>), <code>REPORT_TIME=0830</code> (время отчёта) и <code>TG_NO_WAN=1</code> (не слать напрямую через провайдера).</p>
   </div></div>
 
   <div class="step"><div class="sn">10.3</div><div class="sb">
@@ -1704,6 +1704,10 @@ DD=${DD:-/data/awg}
 . "$DD/telegram.env" || exit 2
 [ -r "$DD/awg.env" ] &amp;&amp; . "$DD/awg.env"
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}
+<span class="c"># Имя роутера в первой строке каждого сообщения: ROUTER_NAME в telegram.env, иначе hostname.</span>
+<span class="c"># Оно же хэштег (#DR7): в Telegram по нему видны все сообщения одного роутера.</span>
+RNAME=${ROUTER_NAME:-$(hostname)}
+RTAG=$(printf '%s' "$RNAME" | sed -E 's/[^[:alnum:]_]+/_/g; s/^_+|_+$//g')
 
 MODE=""; FLUSH=0
 [ "$1" = "--flush" ] &amp;&amp; { FLUSH=1; shift; }
@@ -1731,8 +1735,12 @@ send_via() {
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TG_TOKEN" |
     curl "${args[@]}" -K - \
       --data-urlencode "chat_id=${TG_CHAT}" \
-      --data-urlencode "text=$3" \
+      --data-urlencode "text=$(header)"$'\n'"$3" \
       --data-urlencode "disable_web_page_preview=true" 2&gt;/dev/null
+}
+
+header() {  # первая строка: значок и имя роутера, жирным и хэштегом
+  if [ "$MODE" = html ]; then printf '🛜 &lt;b&gt;#%s&lt;/b&gt;' "${RTAG:-router}"; else printf '🛜 #%s' "${RTAG:-router}"; fi
 }
 
 send_text() {
@@ -1788,7 +1796,7 @@ log "ВСЕ КАНАЛЫ НЕДОСТУПНЫ, сообщение отложен
 spool_add "🕓 (отложено, событие в $(date '+%F %T'))"$'\n'"$TEXT"
 exit 1
 EOF
-chmod 700 /data/awg/notify.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 96 строк">Показать целиком · 96 строк</button></figure>
+chmod 700 /data/awg/notify.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 104 строк">Показать целиком · 104 строк</button></figure>
 <figure class="cb long"><figcaption><span class="on on-router">Роутер</span><span class="cbt">создать awg-notify.sh</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>cat &gt; /data/awg/awg-notify.sh &lt;&lt;'EOF'
 <span class="c">#!/bin/bash</span>
 <span class="c"># awg-notify.sh — уведомления в Telegram о работе failover.</span>
@@ -1806,7 +1814,6 @@ LASTREP=$DD/notify.lastreport
 [ -r "$DD/telegram.env" ] &amp;&amp; . "$DD/telegram.env"
 TABLE=${TABLE:-0}; MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
 REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера (можно задать в telegram.env)
-H=$(hostname)
 
 <span class="c"># ---------- утилиты ----------</span>
 esc()  { sed -e 's/&amp;/\&amp;amp;/g' -e 's/&lt;/\&amp;lt;/g' -e 's/&gt;/\&amp;gt;/g'; }
@@ -1913,7 +1920,7 @@ report() {
     printf '  процессов amneziawg-go: %s\n' "$(pgrep -c amneziawg-go)"
     printf '  сбоев доставки в Telegram за 24 ч: %s\n' "$(awk -v s="$(date -d '24 hours ago' '+%F %T')" '($1" "$2)&gt;=s &amp;&amp; /не удалось/{n++} END{print n+0}' "$DD/notify.log" 2&gt;/dev/null)"
   )
-  send "&lt;b&gt;📊 Суточный отчёт&lt;/b&gt; · $H · $(date '+%F')"$'\n'"&lt;pre&gt;$(printf '%s' "$body" | esc)&lt;/pre&gt;"
+  send "&lt;b&gt;📊 Суточный отчёт&lt;/b&gt; · $(date '+%F')"$'\n'"&lt;pre&gt;$(printf '%s' "$body" | esc)&lt;/pre&gt;"
   save_base
   [ -f "$EV" ] &amp;&amp; tail -n 500 "$EV" &gt; "$EV.t" &amp;&amp; mv "$EV.t" "$EV"
 }
@@ -1946,7 +1953,7 @@ on_line() {
     *) return ;;
   esac
   sleep 4   # даём маршрутам устояться
-  send "&lt;b&gt;${title}&lt;/b&gt; · $H"$'\n'"$(printf '%s' "$extra" | esc)"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"$'\n'"&lt;code&gt;$(printf '%s' "$l" | trunc 200 | esc)&lt;/code&gt;"
+  send "&lt;b&gt;${title}&lt;/b&gt;"$'\n'"$(printf '%s' "$extra" | esc)"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"$'\n'"&lt;code&gt;$(printf '%s' "$l" | trunc 200 | esc)&lt;/code&gt;"
 }
 
 <span class="c"># ---------- фоновый контроль раз в минуту ----------</span>
@@ -1956,12 +1963,12 @@ chk() {   # $1=имя $2=1 если плохо $3=тревога $4=восста
   if [ "$2" = 1 ]; then
     BAD[$n]=$(( ${BAD[$n]:-0} + 1 ))
     if [ "${BAD[$n]}" -ge 3 ] &amp;&amp; [ "${ALR[$n]:-0}" = 0 ]; then
-      ALR[$n]=1; send "&lt;b&gt;$3&lt;/b&gt; · $H"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
+      ALR[$n]=1; send "&lt;b&gt;$3&lt;/b&gt;"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
     fi
   else
     BAD[$n]=0
     if [ "${ALR[$n]:-0}" = 1 ]; then
-      ALR[$n]=0; send "&lt;b&gt;$4&lt;/b&gt; · $H"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
+      ALR[$n]=0; send "&lt;b&gt;$4&lt;/b&gt;"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
     fi
   fi
 }
@@ -1970,7 +1977,7 @@ monitor() {
   while sleep 60; do
     if [ -n "$BACKUP" ]; then
       a=$(hs_age "$BACKUP"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } &amp;&amp; bad=1
-      chk backup "$bad" "⚠️ Запасной канал потерян: при падении основного переключаться некуда" "✅ Запасной канал восстановлен"
+      chk backup "$bad" "⚠️ Запасной канал потерян" "✅ Запасной канал восстановлен"
     fi
     a=$(hs_age "$MAIN"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } &amp;&amp; bad=1
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
@@ -2002,18 +2009,18 @@ daemon() {
   sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
   if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, наблюдатель запущен"; else t="🟢 Наблюдатель awg-notify перезапущен"; fi
-  send "&lt;b&gt;$t&lt;/b&gt; · $H"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
+  send "&lt;b&gt;$t&lt;/b&gt;"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"
   tail -n0 -F "$LOGF" 2&gt;/dev/null | while IFS= read -r l; do on_line "$l"; done
 }
 
 case "${1:-daemon}" in
   report) report ;;
-  test)   if send "&lt;b&gt;✅ Тест уведомлений&lt;/b&gt; · $H"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
+  test)   if send "&lt;b&gt;✅ Тест уведомлений&lt;/b&gt;"$'\n'"&lt;pre&gt;$(snapshot | esc)&lt;/pre&gt;"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
   daemon) daemon ;;
   *)      echo "использование: $0 [daemon|report|test]"; exit 1 ;;
 esac
 EOF
-chmod 700 /data/awg/awg-notify.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 225 строк">Показать целиком · 225 строк</button></figure>
+chmod 700 /data/awg/awg-notify.sh</code></pre><button class="more" type="button" aria-expanded="false" data-label="Показать целиком · 224 строк">Показать целиком · 224 строк</button></figure>
   </div></div>
 
   <div class="step"><div class="sn">10.4</div><div class="sb">

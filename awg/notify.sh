@@ -8,6 +8,10 @@ DD=${DD:-/data/awg}
 . "$DD/telegram.env" || exit 2
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}
+# Имя роутера в первой строке каждого сообщения: ROUTER_NAME в telegram.env, иначе hostname.
+# Оно же хэштег (#DR7): в Telegram по нему видны все сообщения одного роутера.
+RNAME=${ROUTER_NAME:-$(hostname)}
+RTAG=$(printf '%s' "$RNAME" | sed -E 's/[^[:alnum:]_]+/_/g; s/^_+|_+$//g')
 
 MODE=""; FLUSH=0
 [ "$1" = "--flush" ] && { FLUSH=1; shift; }
@@ -35,8 +39,12 @@ send_via() {
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TG_TOKEN" |
     curl "${args[@]}" -K - \
       --data-urlencode "chat_id=${TG_CHAT}" \
-      --data-urlencode "text=$3" \
+      --data-urlencode "text=$(header)"$'\n'"$3" \
       --data-urlencode "disable_web_page_preview=true" 2>/dev/null
+}
+
+header() {  # первая строка: значок и имя роутера, жирным и хэштегом
+  if [ "$MODE" = html ]; then printf '🛜 <b>#%s</b>' "${RTAG:-router}"; else printf '🛜 #%s' "${RTAG:-router}"; fi
 }
 
 send_text() {

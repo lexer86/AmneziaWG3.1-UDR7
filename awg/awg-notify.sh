@@ -14,7 +14,6 @@ LASTREP=$DD/notify.lastreport
 [ -r "$DD/telegram.env" ] && . "$DD/telegram.env"
 TABLE=${TABLE:-0}; MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
 REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера (можно задать в telegram.env)
-H=$(hostname)
 
 # ---------- утилиты ----------
 esc()  { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -121,7 +120,7 @@ report() {
     printf '  процессов amneziawg-go: %s\n' "$(pgrep -c amneziawg-go)"
     printf '  сбоев доставки в Telegram за 24 ч: %s\n' "$(awk -v s="$(date -d '24 hours ago' '+%F %T')" '($1" "$2)>=s && /не удалось/{n++} END{print n+0}' "$DD/notify.log" 2>/dev/null)"
   )
-  send "<b>📊 Суточный отчёт</b> · $H · $(date '+%F')"$'\n'"<pre>$(printf '%s' "$body" | esc)</pre>"
+  send "<b>📊 Суточный отчёт</b> · $(date '+%F')"$'\n'"<pre>$(printf '%s' "$body" | esc)</pre>"
   save_base
   [ -f "$EV" ] && tail -n 500 "$EV" > "$EV.t" && mv "$EV.t" "$EV"
 }
@@ -154,7 +153,7 @@ on_line() {
     *) return ;;
   esac
   sleep 4   # даём маршрутам устояться
-  send "<b>${title}</b> · $H"$'\n'"$(printf '%s' "$extra" | esc)"$'\n'"<pre>$(snapshot | esc)</pre>"$'\n'"<code>$(printf '%s' "$l" | trunc 200 | esc)</code>"
+  send "<b>${title}</b>"$'\n'"$(printf '%s' "$extra" | esc)"$'\n'"<pre>$(snapshot | esc)</pre>"$'\n'"<code>$(printf '%s' "$l" | trunc 200 | esc)</code>"
 }
 
 # ---------- фоновый контроль раз в минуту ----------
@@ -164,12 +163,12 @@ chk() {   # $1=имя $2=1 если плохо $3=тревога $4=восста
   if [ "$2" = 1 ]; then
     BAD[$n]=$(( ${BAD[$n]:-0} + 1 ))
     if [ "${BAD[$n]}" -ge 3 ] && [ "${ALR[$n]:-0}" = 0 ]; then
-      ALR[$n]=1; send "<b>$3</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"
+      ALR[$n]=1; send "<b>$3</b>"$'\n'"<pre>$(snapshot | esc)</pre>"
     fi
   else
     BAD[$n]=0
     if [ "${ALR[$n]:-0}" = 1 ]; then
-      ALR[$n]=0; send "<b>$4</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"
+      ALR[$n]=0; send "<b>$4</b>"$'\n'"<pre>$(snapshot | esc)</pre>"
     fi
   fi
 }
@@ -178,7 +177,7 @@ monitor() {
   while sleep 60; do
     if [ -n "$BACKUP" ]; then
       a=$(hs_age "$BACKUP"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
-      chk backup "$bad" "⚠️ Запасной канал потерян: при падении основного переключаться некуда" "✅ Запасной канал восстановлен"
+      chk backup "$bad" "⚠️ Запасной канал потерян" "✅ Запасной канал восстановлен"
     fi
     a=$(hs_age "$MAIN"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
@@ -210,13 +209,13 @@ daemon() {
   sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
   if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, наблюдатель запущен"; else t="🟢 Наблюдатель awg-notify перезапущен"; fi
-  send "<b>$t</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"
+  send "<b>$t</b>"$'\n'"<pre>$(snapshot | esc)</pre>"
   tail -n0 -F "$LOGF" 2>/dev/null | while IFS= read -r l; do on_line "$l"; done
 }
 
 case "${1:-daemon}" in
   report) report ;;
-  test)   if send "<b>✅ Тест уведомлений</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
+  test)   if send "<b>✅ Тест уведомлений</b>"$'\n'"<pre>$(snapshot | esc)</pre>"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
   daemon) daemon ;;
   *)      echo "использование: $0 [daemon|report|test]"; exit 1 ;;
 esac

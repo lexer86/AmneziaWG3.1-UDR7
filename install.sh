@@ -13,7 +13,7 @@
 #         --uninstall удалить
 #         --help
 # ============================================================================
-INSTALLER_VERSION=1.1.3
+INSTALLER_VERSION=1.1.4
 AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz
@@ -955,7 +955,11 @@ step_telegram(){
   done
   ask t "Время суточного отчёта ЧЧММ (по часам роутера, сейчас $(date +%H:%M))" "${REPORT_TIME:-0900}"
   [[ "$t" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]] || { warn "формат ЧЧММ, ставлю 0900"; t=0900; }
-  ( umask 077; printf 'TG_TOKEN=%s\nTG_CHAT=%s\nREPORT_TIME=%s\n' "$TG_TOKEN" "$TG_CHAT" "$t" > "$DD/telegram.env" )
+  local rn
+  info "имя роутера стоит первой строкой каждого сообщения и работает как хэштег: если в один чат пишут несколько роутеров, по нему видны сообщения одного"
+  ask rn "Имя роутера в сообщениях" "${ROUTER_NAME:-$(hostname)}"
+  rn=$(printf '%s' "$rn" | tr -d '"$`\\')
+  ( umask 077; printf 'TG_TOKEN=%s\nTG_CHAT=%s\nREPORT_TIME=%s\nROUTER_NAME="%s"\n' "$TG_TOKEN" "$TG_CHAT" "$t" "$rn" > "$DD/telegram.env" )
   yn "Слать напрямую через провайдера, если оба туннеля недоступны (иначе сообщение отложится)?" Y || echo "TG_NO_WAN=1" >> "$DD/telegram.env"
   unset TG_TOKEN
   info "отправляю тестовое сообщение…"
