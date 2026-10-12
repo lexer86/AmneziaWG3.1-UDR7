@@ -871,6 +871,11 @@ cat > /data/awg/failover.sh <<'EOF'
 #   failover.sh            основной цикл (запускает systemd: awg-failover.service)
 #   failover.sh cleanup    убрать свои маршруты из таблицы PBR
 # Параметры: /data/awg/awg.env (создаёт awg-detect.sh).
+# Ручное управление (пишет бот Telegram или вы сами): /data/awg/control
+#   MODE=auto|main|backup|off   auto — как обычно; main/backup — держать этот канал, пока он жив,
+#                               при его падении всё равно спасаться на другой; off — каналы остановлены
+#   OFF_ACTION=block|wan        что делать с PBR-трафиком при MODE=off: блокировать или пустить через провайдера
+#   DISABLED="awgbackup"        остановленные каналы: интерфейс удаляется, сторож его не поднимает
 DD=${DD:-/data/awg}
 iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
 RS_ENV=$RECOVER_SEC                # RECOVER_SEC из командной строки важнее awg.env (для тестов)
@@ -888,6 +893,7 @@ FAIL_MAX=${FAIL_MAX:-3}           # сбоев подряд до переклю�
 METRIC=5                          # метрика активного туннеля в таблице PBR
 SIM=/tmp/awg-sim-down             # флаг имитации падения основного канала
 LOGF=$DD/failover.log
+CTL=$DD/control
 
 log(){
   local m; m="$(date '+%F %T') $*"
@@ -930,6 +936,7 @@ declare -A NEXT_TRY
 ensure_tunnels(){
   local i now; now=$(date +%s)
   for i in $MAIN $BACKUP; do
+    enabled "$i" || continue
     ip link show "$i" >/dev/null 2>&1 && continue
     [ "${NEXT_TRY[$i]:-0}" -gt "$now" ] && continue
     NEXT_TRY[$i]=$((now + 30))
@@ -940,10 +947,31 @@ ensure_tunnels(){
 
 set_active(){
   local a=$1 o
-  if [ "$a" = "$MAIN" ]; then o=$BACKUP; else o=$MAIN; fi
+  for o in $MAIN $BACKUP; do [ "$o" = "$a" ] || ip route del default dev "$o" table "$TABLE" 2>/dev/null; done
   ip route replace default dev "$a" metric $METRIC table "$TABLE"
-  [ -n "$o" ] && ip route del default dev "$o" table "$TABLE" 2>/dev/null
   ip route replace blackhole default metric 200 table "$TABLE" 2>/dev/null
+}
+
+# каналы остановлены вручную: block — только blackhole (PBR-трафик стоит), wan — таблица пуста (трафик идёт мимо туннеля)
+set_off(){
+  local o
+  for o in $MAIN $BACKUP; do ip route del default dev "$o" table "$TABLE" 2>/dev/null; done
+  if [ "$OFF_ACTION" = wan ]; then ip route del blackhole default metric 200 table "$TABLE" 2>/dev/null
+  else ip route replace blackhole default metric 200 table "$TABLE" 2>/dev/null; fi
+}
+
+# shellcheck disable=SC1090
+ctl_load(){ MODE=auto; OFF_ACTION=block; DISABLED=""; [ -r "$CTL" ] && . "$CTL"; case "$MODE" in auto|main|backup|off) ;; *) MODE=auto;; esac; }
+enabled(){ [ -n "$1" ] && case " $DISABLED " in *" $1 "*) return 1;; esac; }
+stop_disabled(){
+  local i
+  for i in $MAIN $BACKUP; do
+    enabled "$i" && continue
+    NEXT_TRY[$i]=0                      # после включения канал поднимется сразу
+    ip link show "$i" >/dev/null 2>&1 || continue
+    ip link del "$i" 2>/dev/null; pkill -f "amneziawg-go $i\$" 2>/dev/null
+    log "канал $i остановлен вручную"
+  done
 }
 
 cleanup(){
@@ -958,46 +986,76 @@ trap 'cleanup; log "остановка: маршруты убраны"; exit 0' 
 # после загрузки роутера даём UniFi 30 с собрать свои правила и таблицы
 [ "$(cut -d. -f1 /proc/uptime)" -lt 300 ] && sleep "${BOOT_WAIT:-30}"
 
-state=$MAIN; fails=0; bfails=0; ok_since=0; both_flag=0
-log "старт: основной $MAIN, запасной ${BACKUP:-нет}, таблица $TABLE, возврат через ${RECOVER_SEC}с"
+ctl_load
+state=""; fails=0; bfails=0; ok_since=0; both_flag=0; offstate=""; lastmode=""
+log "старт: основной $MAIN, запасной ${BACKUP:-нет}, таблица $TABLE, возврат через ${RECOVER_SEC}с, режим $MODE${DISABLED:+, остановлены: $DISABLED}"
 
 while true; do
+  ctl_load
+  stop_disabled
   ensure_tunnels
   prepare
 
-  if [ "$state" = "$MAIN" ]; then
-    if check "$MAIN"; then
-      [ $both_flag -eq 1 ] && log "ВОССТАНОВЛЕН канал $MAIN, трафик по PBR снова идёт"
+  # P — предпочтительный канал режима, O — запасной для него (если есть и не остановлен)
+  case "$MODE" in backup) P=$BACKUP;; *) P=$MAIN;; esac
+  enabled "$P" || { if enabled "$MAIN"; then P=$MAIN; elif enabled "$BACKUP"; then P=$BACKUP; else P=""; fi; }
+  O=""; for i in $MAIN $BACKUP; do [ "$i" != "$P" ] && enabled "$i" && O=$i; done
+
+  if [ "$MODE" = off ] || [ -z "$P" ]; then
+    if [ "$offstate" != "$OFF_ACTION" ]; then
+      if [ "$OFF_ACTION" = wan ]; then log "РУЧНОЙ РЕЖИМ: каналы остановлены, PBR-трафик идёт через провайдера"
+      else log "РУЧНОЙ РЕЖИМ: каналы остановлены, PBR-трафик блокируется"; fi
+      offstate=$OFF_ACTION
+    fi
+    set_off; lastmode=off; sleep "$INTERVAL"; continue
+  fi
+  [ -n "$offstate" ] && { log "РУЧНОЙ РЕЖИМ: каналы снова работают"; offstate=""; }
+
+  # смена режима или текущий канал остановлен: сразу на предпочтительный, если он жив
+  if [ "$MODE" != "$lastmode" ] || ! enabled "$state"; then
+    if [ "$state" != "$P" ] && { [ -z "$state" ] || ! enabled "$state" || check "$P"; }; then
+      [ -n "$lastmode" ] && log "РУЧНОЙ РЕЖИМ: $MODE, канал $P"
+      state=$P; fails=0; bfails=0; ok_since=0; both_flag=0
+    elif [ -n "$lastmode" ]; then
+      log "РУЧНОЙ РЕЖИМ: $MODE"
+    fi
+    lastmode=$MODE
+  fi
+  RS=$RECOVER_SEC; [ "$MODE" != auto ] && RS=0     # в ручном режиме возврат на выбранный канал сразу
+
+  if [ "$state" = "$P" ]; then
+    if check "$P"; then
+      [ $both_flag -eq 1 ] && log "ВОССТАНОВЛЕН канал $P, трафик по PBR снова идёт"
       fails=0; both_flag=0
     else
       fails=$((fails+1))
     fi
     if [ $fails -ge $FAIL_MAX ]; then
-      if [ -n "$BACKUP" ] && check "$BACKUP"; then
-        state=$BACKUP; fails=0; bfails=0; ok_since=0; both_flag=0
-        log "ПЕРЕКЛЮЧЕНИЕ на запасной канал $BACKUP"
+      if [ -n "$O" ] && check "$O"; then
+        state=$O; fails=0; bfails=0; ok_since=0; both_flag=0
+        if [ "$O" = "$BACKUP" ]; then log "ПЕРЕКЛЮЧЕНИЕ на запасной канал $O"; else log "ПЕРЕКЛЮЧЕНИЕ на основной канал $O (выбранный $P не отвечает)"; fi
       elif [ $both_flag -eq 0 ]; then
         both_flag=1
-        if [ -n "$BACKUP" ]; then log "оба канала не отвечают, остаюсь на $MAIN (трафик по PBR блокируется)"
-        else log "единственный канал $MAIN не отвечает (трафик по PBR блокируется)"; fi
+        if [ -n "$O" ]; then log "оба канала не отвечают, остаюсь на $P (трафик по PBR блокируется)"
+        else log "единственный канал $P не отвечает (трафик по PBR блокируется)"; fi
       fi
     fi
   else
-    if check "$MAIN"; then
-      [ $ok_since -eq 0 ] && { ok_since=$(date +%s); log "основной снова отвечает, жду ${RECOVER_SEC}с без сбоев"; }
-      if [ $(( $(date +%s) - ok_since )) -ge "$RECOVER_SEC" ]; then
-        state=$MAIN; fails=0; ok_since=0
-        log "ВОЗВРАТ на основной канал $MAIN"
+    if check "$P"; then
+      [ $ok_since -eq 0 ] && { ok_since=$(date +%s); [ "$RS" -gt 0 ] && log "основной снова отвечает, жду ${RS}с без сбоев"; }
+      if [ $(( $(date +%s) - ok_since )) -ge "$RS" ]; then
+        state=$P; fails=0; ok_since=0
+        if [ "$P" = "$MAIN" ]; then log "ВОЗВРАТ на основной канал $MAIN"; else log "ВОЗВРАТ на выбранный канал $P"; fi
       fi
     else
-      [ $ok_since -ne 0 ] && log "основной снова сбоит, отсчёт возврата сброшен"
+      [ $ok_since -ne 0 ] && [ "$RS" -gt 0 ] && log "основной снова сбоит, отсчёт возврата сброшен"
       ok_since=0
     fi
-    if [ "$state" = "$BACKUP" ]; then
-      if check "$BACKUP"; then bfails=0; else bfails=$((bfails+1)); fi
-      if [ $bfails -ge $FAIL_MAX ] && check "$MAIN"; then
-        state=$MAIN; fails=0; bfails=0; ok_since=0
-        log "запасной не отвечает, основной жив: возврат на $MAIN"
+    if [ "$state" != "$P" ]; then
+      if check "$state"; then bfails=0; else bfails=$((bfails+1)); fi
+      if [ $bfails -ge $FAIL_MAX ] && check "$P"; then
+        state=$P; fails=0; bfails=0; ok_since=0
+        log "запасной не отвечает, основной жив: возврат на $P"
       fi
     fi
   fi
@@ -1091,12 +1149,14 @@ NOTIFY=0; MOTD=0
 SUBN=0; SELF=0
 [ -f "$D/awg-subnets.service" ] && [ -x "$D/subnets.sh" ] && grep -q '^EXTRA_SUBNETS="\?[0-9]' "$D/awg.env" 2>/dev/null && { SUBN=1; cp "$D/awg-subnets.service" /etc/systemd/system/; }
 [ -f "$D/awg-self.service" ] && [ -x "$D/self.sh" ] && { SELF=1; cp "$D/awg-self.service" /etc/systemd/system/; }
+BOT=0; [ -f "$D/awg-bot.service" ] && [ -f "$D/.bot" ] && [ -f "$D/telegram.env" ] && { BOT=1; cp "$D/awg-bot.service" /etc/systemd/system/; }
 systemctl daemon-reload
 systemctl enable --now awg-failover
 [ $NOTIFY = 1 ] && systemctl enable --now awg-notify
 [ $MOTD = 1 ] && systemctl enable --now awg-motd
 [ $SUBN = 1 ] && systemctl enable --now awg-subnets
 [ $SELF = 1 ] && systemctl enable --now awg-self
+[ $BOT = 1 ] && systemctl enable --now awg-bot
 # панель и команды возвращаются, только если соответствующая часть ставилась
 # установщик отмечает выбранные компоненты файлами .panel/.audit; при ручной установке по гайду
 # признак — наличие самих скриптов
@@ -1493,7 +1553,11 @@ temp=""; for z in /sys/class/thermal/thermal_zone*/temp; do [ -r "$z" ] && { tem
 wan=$(ip -4 -br addr show "$WANIF" 2>/dev/null | awk '{print $2, $3}')
 echo " Нагрузка : ${load:-?} · RAM ${mem:-?} · /data ${disk:-?}${temp}"
 echo " WAN $WANIF : ${wan:-нет данных}"
-if systemctl is-enabled awg-notify >/dev/null 2>&1; then echo " Telegram : awg-notify $(systemctl is-active awg-notify 2>/dev/null)"; fi
+if systemctl is-enabled awg-notify >/dev/null 2>&1; then echo " Telegram : awg-notify $(systemctl is-active awg-notify 2>/dev/null)$(systemctl is-enabled awg-bot >/dev/null 2>&1 && echo ", бот awg-bot $(systemctl is-active awg-bot 2>/dev/null)")"; fi
+if [ -r "$DD/control" ]; then
+  cm=$(sed -n 's/^MODE=//p' "$DD/control" | tr -d '"'); cd_=$(sed -n 's/^DISABLED=//p' "$DD/control" | tr -d '"')
+  { [ -n "$cm" ] && [ "$cm" != auto ]; } || [ -n "$cd_" ] && echo " ${Y}Ручной режим${N} : ${cm:-auto}${cd_:+, остановлены: $cd_} (бот; сброс — rm $DD/control)"
+fi
 
 echo
 hdr "EVENTS (last 20)"
@@ -1627,6 +1691,10 @@ AWG=${AWG:-$DD/awg}
 TABLE=${TABLE:-0}; MARK=${MARK:-0x0/0x0}; RAIL_IF=${RAIL_IF:-wgclt1}
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
 NT=$(echo $TUNS | wc -w)
+# ручной режим из бота: остановленные каналы и MODE=off — не ошибка
+CMODE=auto; CDIS=""; if [ -r "$DD/control" ]; then CMODE=$(sed -n 's/^MODE=//p' "$DD/control" | tr -d '"'); CDIS=$(sed -n 's/^DISABLED=//p' "$DD/control" | tr -d '"'); fi
+CMODE=${CMODE:-auto}; for i in $CDIS; do NT=$((NT-1)); done
+stopped(){ case " $CDIS " in *" $1 "*) return 0;; esac; [ "$CMODE" = off ]; }
 ok=0; warn=0; bad=0
 if [ -t 1 ] && [ -z "$NO_COLOR" ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m'; else G=; R=; Y=; B=; N=; fi
 P(){ echo "  ${G}OK${N}    $1"; ok=$((ok+1)); }
@@ -1644,9 +1712,10 @@ sec "Службы и процессы"
 st=$(systemctl is-active awg-failover 2>/dev/null); en=$(systemctl is-enabled awg-failover 2>/dev/null)
 [ "$st" = active ] && P "awg-failover: active" || F "awg-failover: ${st:-нет}" "systemctl start awg-failover"
 [ "$en" = enabled ] && P "awg-failover: автозапуск включён" || W "awg-failover: автозапуск ${en:-нет}" "systemctl enable awg-failover"
-for u in awg-failover awg-notify awg-motd; do
+for u in awg-failover awg-notify awg-bot awg-motd; do
   [ -f "$DD/$u.service" ] || continue
   [ $u = awg-notify ] && [ ! -f "$DD/telegram.env" ] && continue   # Telegram не настраивался
+  [ $u = awg-bot ] && [ ! -f "$DD/.bot" ] && continue              # бот не включался
   [ $u = awg-motd ] && [ ! -f "$DD/motd.orig" ] && continue        # баннер не отключался
   cmp -s "/etc/systemd/system/$u.service" "$DD/$u.service" && P "$u.service совпадает с копией в $DD" \
     || W "$u.service в /etc отличается от копии в $DD или отсутствует" "cp $DD/$u.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now $u"
@@ -1658,10 +1727,16 @@ c=$(pgrep -c amneziawg-go 2>/dev/null); [ "${c:-0}" = "$NT" ] && P "процес
 if [ -f "$DD/telegram.env" ]; then
   [ "$(systemctl is-active awg-notify 2>/dev/null)" = active ] && P "awg-notify: active" || W "awg-notify не запущен" "systemctl enable --now awg-notify"
 fi
+if [ -f "$DD/.bot" ]; then
+  [ "$(systemctl is-active awg-bot 2>/dev/null)" = active ] && P "awg-bot: active (управление из Telegram)" || W "awg-bot не запущен" "systemctl enable --now awg-bot; tail $DD/bot.log"
+fi
+case "$CMODE" in auto) ;; off) W "каналы остановлены вручную (бот или $DD/control)" "в боте «▶️ Запустить всё» или rm $DD/control";; *) W "ручной режим: держать ${CMODE} (бот)" "в боте «🤖 Авто» или rm $DD/control";; esac
+[ -n "$CDIS" ] && W "остановлены вручную: $CDIS" "в боте «▶️ Запустить всё»"
 
 sec "Туннели"
-for i in $TUNS; do ip link show "$i" >/dev/null 2>&1 && P "$i существует" || F "$i отсутствует" "$DD/up.sh $i"; done
+for i in $TUNS; do stopped "$i" && { echo "  ·     $i остановлен вручную — пропускаю"; continue; }; ip link show "$i" >/dev/null 2>&1 && P "$i существует" || F "$i отсутствует" "$DD/up.sh $i"; done
 for i in $TUNS; do
+  stopped "$i" && continue
   a=$(age_s "$i")
   if [ "$a" -ge 0 ] && [ "$a" -lt 180 ]; then P "$i: handshake ${a}с назад"
   else W "$i: handshake давно или не было ($a)" "curl -s --interface $i https://ifconfig.me; $DD/awg show $i"; fi
@@ -1674,7 +1749,7 @@ n=$(ip rule show | grep -c "fwmark ${MARK%%/*}")
 t=$(ip route show table "$TABLE" 2>/dev/null)
 echo "        таблица $TABLE:"; echo "$t" | sed 's/^/          /'
 c=$(echo "$t" | grep -c 'dev awg')
-[ "$c" = 1 ] && P "в таблице PBR ровно один AWG-маршрут" || { [ "$c" = 0 ] && F "в таблице PBR нет AWG-маршрута" "systemctl restart awg-failover" || W "AWG-маршрутов в таблице: $c (нужен 1)" "systemctl restart awg-failover"; }
+if [ "$CMODE" = off ]; then echo "  ·     каналы остановлены вручную: AWG-маршрута в таблице нет, так и задумано"; else [ "$c" = 1 ] && P "в таблице PBR ровно один AWG-маршрут" || { [ "$c" = 0 ] && F "в таблице PBR нет AWG-маршрута" "systemctl restart awg-failover" || W "AWG-маршрутов в таблице: $c (нужен 1)" "systemctl restart awg-failover"; }; fi
 echo "$t" | grep -q blackhole && P "blackhole на месте: при падении туннелей утечки в WAN нет" || W "в таблице нет blackhole" "systemctl restart awg-failover"
 [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = 1 ] && P "ip_forward = 1" || F "ip_forward не 1" "sysctl -w net.ipv4.ip_forward=1"
 if [ -n "$EXTRA_SUBNETS" ] && [ -x "$DD/subnets.sh" ]; then   # схема awg-subnets (установщик 1.1+)
@@ -1782,7 +1857,7 @@ printf 'TG_TOKEN=%s\nTG_CHAT=%s\n' "$T" "$C" > /data/awg/telegram.env
 chmod 600 /data/awg/telegram.env; unset T C
 ```
 
-Дополнительно в этот файл можно дописать `ROUTER_NAME="DR7"` (имя роутера: оно стоит первой строкой каждого сообщения как хэштег `#DR7`, по нему в одном чате различаются несколько роутеров; без него берётся `hostname`), `REPORT_TIME=0830` (время отчёта) и `TG_NO_WAN=1` (не слать напрямую через провайдера).
+Дополнительно в этот файл можно дописать `ROUTER_NAME="DR7"` (имя роутера: оно стоит первой строкой каждого сообщения как хэштег `#DR7`, по нему в одном чате различаются несколько роутеров; без него берётся `hostname`), `REPORT_TIME=0830` (время суточного отчёта; `REPORT_TIME=off` — только по запросу из бота) и `TG_NO_WAN=1` (не слать напрямую через провайдера).
 
 ### 10.3 Скрипты
 
@@ -1902,8 +1977,9 @@ cat > /data/awg/awg-notify.sh <<'EOF'
 #!/bin/bash
 # awg-notify.sh — уведомления в Telegram о работе failover.
 #   awg-notify.sh          демон (запускает systemd: awg-notify.service)
-#   awg-notify.sh report   отправить суточный отчёт сейчас
+#   awg-notify.sh report   отправить отчёт сейчас
 #   awg-notify.sh test     тестовое сообщение со снимком состояния
+#   awg-notify.sh text status|report|log|ip|check   напечатать текст (HTML) для бота, ничего не отправляя
 export LC_ALL=C.UTF-8
 DD=${DD:-/data/awg}
 AWG=$DD/awg
@@ -1914,7 +1990,9 @@ LASTREP=$DD/notify.lastreport
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 [ -r "$DD/telegram.env" ] && . "$DD/telegram.env"
 TABLE=${TABLE:-0}; MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
-REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера (можно задать в telegram.env)
+REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера; off — только по запросу (telegram.env)
+CTL=$DD/control                    # ручной режим сторожа: MODE, OFF_ACTION, DISABLED (пишет бот)
+BASET=$DD/notify.basetime          # с какого момента считается трафик в отчёте
 
 # ---------- утилиты ----------
 esc()  { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -1943,6 +2021,25 @@ active() {
   r=$(ip route show table "$TABLE" 2>/dev/null | awk '$1=="default" && /dev awg/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
   echo "${r:-none}"
 }
+# shellcheck disable=SC1090
+ctl() { MODE=auto; OFF_ACTION=block; DISABLED=""; [ -r "$CTL" ] && . "$CTL"; }
+enabled() { case " $DISABLED " in *" $1 "*) return 1;; esac; }
+mode_text() {
+  ctl
+  case "$MODE" in
+    auto)   printf 'авто' ;;
+    main)   printf 'вручную: держать %s' "$MAIN" ;;
+    backup) printf 'вручную: держать %s' "$BACKUP" ;;
+    off)    if [ "$OFF_ACTION" = wan ]; then printf 'каналы остановлены, PBR через провайдера'; else printf 'каналы остановлены, PBR заблокирован'; fi ;;
+  esac
+  [ -n "$DISABLED" ] && printf '; остановлены: %s' "$DISABLED"
+}
+dot() {   # значок канала: 🟢 активный, ⚪ жив и ждёт, 🔴 не отвечает, ⏸ остановлен вручную
+  local t=$1 a=$2 h
+  enabled "$t" || { printf '⏸'; return; }
+  [ "$t" = "$a" ] && { printf '🟢'; return; }
+  h=$(hs_age "$t"); if [ "$h" -ge 0 ] && [ "$h" -lt 300 ]; then printf '⚪'; else printf '🔴'; fi
+}
 extip() {
   local ip u
   [ "$1" = none ] && { echo "-"; return; }
@@ -1953,16 +2050,21 @@ extip() {
   echo "-"
 }
 health() {   # $1=active $2=возраст handshake основного $3=запасного
+  ctl
   if ! systemctl is-active --quiet awg-failover; then echo "CRITICAL: сторож awg-failover не работает"
+  elif [ "$MODE" = off ]; then echo "STOPPED: каналы остановлены вручную"
   elif [ "$1" = none ]; then echo "CRITICAL: нет AWG-маршрута в таблице PBR"
+  elif [ -n "$BACKUP" ] && [ "$1" = "$BACKUP" ] && [ "$MODE" = backup ]; then echo "MANUAL: запасной канал выбран вручную"
   elif [ -n "$BACKUP" ] && [ "$1" = "$BACKUP" ]; then echo "DEGRADED: работаем на запасном канале"
+  elif [ -n "$BACKUP" ] && ! enabled "$BACKUP"; then echo "MANUAL: запасной канал остановлен вручную"
   elif [ -n "$BACKUP" ] && { [ "$3" -lt 0 ] || [ "$3" -gt 300 ]; }; then echo "DEGRADED: запасной канал не отвечает"
   else echo "HEALTHY"; fi
 }
 snapshot() {
-  local a t; a=$(active)
-  echo "Активный канал : $a"
-  for t in $TUNS; do printf '%-14s : handshake %s\n' "$t" "$(fa "$(hs_age "$t")")"; done
+  local a t; a=$(active); ctl
+  echo "Режим          : $(mode_text)"
+  echo "Активный канал : ${a/none/нет}"
+  for t in $TUNS; do printf '%s %-12s : handshake %s\n' "$(dot "$t" "$a")" "$t" "$(fa "$(hs_age "$t")")"; done
   echo "Внешний IP     : $(extip "$a")"
   echo "Время роутера  : $(date '+%F %T')"
 }
@@ -1983,23 +2085,26 @@ delta() {
   [ "$cur" -lt "$base" ] && base=0     # интерфейс пересоздавался
   echo $((cur - base))
 }
-save_base() { local i; for i in $TUNS; do echo "$i $(cnt "$i" rx) $(cnt "$i" tx)"; done > "$ST"; }
+save_base() { local i; for i in $TUNS; do echo "$i $(cnt "$i" rx) $(cnt "$i" tx)"; done > "$ST"; date '+%F %H:%M' > "$BASET"; }
 
 # ---------- суточный отчёт ----------
-report() {
-  local a m b ip up body journal evs t i
+report_body() {   # текст отчёта (HTML); трафик и события — с момента прошлого суточного сброса
+  local a m b ip up body journal evs t i since
+  since=$(cat "$BASET" 2>/dev/null || echo 'прошлого сброса')
   a=$(active); m=$(hs_age "$MAIN"); b=-1; [ -n "$BACKUP" ] && b=$(hs_age "$BACKUP"); ip=$(extip "$a")
   up=$(awk '{s=int($1); printf "%dд %dч %dм", s/86400, s%86400/3600, s%3600/60}' /proc/uptime)
   evs=$(grep -E 'ПЕРЕКЛЮЧЕНИЕ|ВОЗВРАТ|ВОССТАНОВЛЕН|не отвечает' "$LOGF" 2>/dev/null | tail -5 | trunc 110)
   journal=$(tail -n 8 "$LOGF" 2>/dev/null | trunc 110)
   body=$(
     printf 'Состояние : %s\n' "$(health "$a" "$m" "$b")"
+    printf 'Режим     : %s\n' "$(mode_text)"
     printf 'Активный  : %s (внешний IP %s)\n' "$a" "$ip"
     printf 'Аптайм    : %s\n\n' "$up"
-    printf '%-10s %-10s %-10s %s\n' Tunnel RX-24h TX-24h handshake
+    printf '   %-10s %-10s %-10s %s\n' Tunnel RX TX handshake
     for i in $TUNS; do
-      printf '%-10s %-10s %-10s %s\n' "$i" "$(hum "$(delta "$i" rx)")" "$(hum "$(delta "$i" tx)")" "$(fa "$(hs_age "$i")")"
+      printf '%s %-10s %-10s %-10s %s\n' "$(dot "$i" "$a")" "$i" "$(hum "$(delta "$i" rx)")" "$(hum "$(delta "$i" tx)")" "$(fa "$(hs_age "$i")")"
     done
+    printf 'трафик с %s · 🟢 активный ⚪ ждёт 🔴 не отвечает ⏸ остановлен\n' "$since"
     printf '\nСобытия за 24 ч:\n'
     if [ -n "$BACKUP" ]; then
       printf '  переключений на запасной: %s\n' "$(evcount switch)"
@@ -2021,26 +2126,34 @@ report() {
     printf '  процессов amneziawg-go: %s\n' "$(pgrep -c amneziawg-go)"
     printf '  сбоев доставки в Telegram за 24 ч: %s\n' "$(awk -v s="$(date -d '24 hours ago' '+%F %T')" '($1" "$2)>=s && /не удалось/{n++} END{print n+0}' "$DD/notify.log" 2>/dev/null)"
   )
-  send "<b>📊 Суточный отчёт</b> · $(date '+%F')"$'\n'"<pre>$(printf '%s' "$body" | esc)</pre>"
-  save_base
-  [ -f "$EV" ] && tail -n 500 "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+  printf '%s' "<pre>$(printf '%s' "$body" | esc)</pre>"
+}
+report() {   # $1=daily — плановый суточный: после отправки счётчики трафика начинаются заново
+  local h="📊 Отчёт по запросу"; [ "$1" = daily ] && h="📊 Суточный отчёт"
+  send "<b>$h</b> · $(date '+%F %H:%M')"$'\n'"$(report_body)"
+  if [ "$1" = daily ]; then
+    save_base
+    [ -f "$EV" ] && tail -n 500 "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+  fi
 }
 
 # ---------- реакция на строку журнала сторожа ----------
 last_both=0
 on_line() {
-  local l="$1" now title extra lastsw
+  local l="$1" now title extra lastsw ch
   now=$(date +%s)
   case "$l" in
     *ПЕРЕКЛЮЧЕНИЕ*)
       echo "$now|switch" >> "$EV"
-      title="⚠️ Переключение на запасной канал"
-      extra="Основной канал не проходит проверку. PBR-трафик идёт через $BACKUP." ;;
+      ch=$(printf '%s' "$l" | grep -oE 'awg[A-Za-z0-9_-]+' | head -1)
+      title="⚠️ Переключение на ${ch:-запасной канал}"
+      extra="Выбранный канал не проходит проверку. PBR-трафик идёт через ${ch:-$BACKUP}." ;;
     *ВОЗВРАТ*|*"возврат на"*)
       lastsw=$(awk -F'|' '$2=="switch"{t=$1} END{print t}' "$EV" 2>/dev/null)
       echo "$now|return" >> "$EV"
-      title="✅ Возврат на основной канал"
-      extra="PBR-трафик снова через $MAIN."
+      ch=$(printf '%s' "$l" | grep -oE 'awg[A-Za-z0-9_-]+' | tail -1)
+      title="✅ Возврат на ${ch:-$MAIN}"
+      extra="PBR-трафик снова через ${ch:-$MAIN}."
       [ -n "$lastsw" ] && extra="$extra На запасном проработали: $(fd $((now - lastsw)))." ;;
     *"оба канала не отвечают"*|*"единственный канал"*)
       [ $((now - last_both)) -lt 300 ] && return
@@ -2074,21 +2187,25 @@ chk() {   # $1=имя $2=1 если плохо $3=тревога $4=восста
   fi
 }
 monitor() {
-  local a bad
+  local a bad rt
   while sleep 60; do
-    if [ -n "$BACKUP" ]; then
+    ctl
+    if [ -n "$BACKUP" ] && enabled "$BACKUP" && [ "$MODE" != off ]; then
       a=$(hs_age "$BACKUP"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
       chk backup "$bad" "⚠️ Запасной канал потерян" "✅ Запасной канал восстановлен"
     fi
     a=$(hs_age "$MAIN"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
+    { ! enabled "$MAIN" || [ "$MODE" = off ]; } && bad=0
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
     bad=0; systemctl is-active --quiet awg-failover || bad=1
     chk svc "$bad" "🛑 awg-failover остановлен: автопереключения нет" "✅ awg-failover снова работает"
     # отложенные сообщения (например, о загрузке): отправляем, как только активный туннель снова жив
     [ -s "$DD/notify.spool" ] && tunnel_ready && "$DD/notify.sh" --flush >/dev/null 2>&1
-    if [ $((10#$(date +%H%M))) -ge $((10#$REPORT_TIME)) ] && [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
-      date +%F > "$LASTREP"
-      report
+    # время отчёта можно поменять из бота: перечитываем; off — только по запросу, счётчики сбрасываются в полночь
+    rt=$(sed -n 's/^REPORT_TIME=//p' "$DD/telegram.env" 2>/dev/null | tr -d '"' | tail -1); rt=${rt:-0900}
+    if [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
+      if [ "$rt" = off ]; then date +%F > "$LASTREP"; save_base
+      elif [[ "$rt" =~ ^[0-9]{4}$ ]] && [ $((10#$(date +%H%M))) -ge $((10#$rt)) ]; then date +%F > "$LASTREP"; report daily; fi
     fi
   done
 }
@@ -2116,6 +2233,19 @@ daemon() {
 
 case "${1:-daemon}" in
   report) report ;;
+  text)
+    case "$2" in
+      status) printf '%s' "<pre>$(snapshot | esc)</pre>" ;;
+      report) report_body ;;
+      log)    printf '%s' "<pre>$(tail -n 15 "$LOGF" 2>/dev/null | trunc 120 | esc)</pre>" ;;
+      ip)     { for t in $TUNS; do printf '%s %-10s : %s\n' "$(dot "$t" "$(active)")" "$t" "$(extip "$t")"; done
+                w=$(curl -4 -s -m 6 ${WANIF:+--interface "$WANIF"} https://api.ipify.org 2>/dev/null); printf '🌐 %-10s : %s\n' "WAN" "${w:--}"; } | esc | sed '1s/^/<pre>/;$s/$/<\/pre>/' ;;
+      check)  if [ -x "$DD/audit.sh" ]; then
+                o=$(NO_COLOR=1 "$DD/audit.sh" 2>&1)
+                printf '%s' "<pre>$( { echo "$o" | grep -E 'OK:.*WARN:.*FAIL:' | tail -1; echo "$o" | grep -E '^ *(WARN|FAIL) ' | head -15; } | trunc 150 | esc)</pre>"
+              else printf 'аудит не установлен'; fi ;;
+      *) echo "использование: $0 text status|report|log|ip|check"; exit 1 ;;
+    esac ;;
   test)   if send "<b>✅ Тест уведомлений</b>"$'\n'"<pre>$(snapshot | esc)</pre>"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
   daemon) daemon ;;
   *)      echo "использование: $0 [daemon|report|test]"; exit 1 ;;
@@ -2165,6 +2295,468 @@ systemctl enable --now awg-notify
 Через ~20 секунд придёт «Наблюдатель awg-notify перезапущен». В сценарии C проверьте событие: `touch /tmp/awg-sim-down`, через 15–20 секунд придёт «Переключение», затем `rm /tmp/awg-sim-down` и через 10 минут «Возврат».
 
 Если роутер выключится целиком, сообщить об этом будет некому. Для такого случая нужен внешний мониторинг (например, healthchecks.io с пингом раз в 5 минут).
+
+### 10.6 Управление из Telegram (бот, по желанию)
+
+Бот отвечает на команды и кнопки в том же чате: статус, отчёт по запросу, журнал, внешние IP, аудит, переключение «держать основной / держать запасной / авто», остановка всех каналов (с выбором: блокировать PBR-трафик или пустить его через провайдера) или одного канала. Нужен `python3`, на UDR7 он есть.
+
+**Роутер** · создать bot.py
+
+```bash
+cat > /data/awg/bot.py <<'EOF'
+#!/usr/bin/env python3
+# awg-bot — управление AmneziaWG на роутере из Telegram: статус, отчёт, переключение и остановка каналов.
+#   python3 /data/awg/bot.py          служба (awg-bot.service)
+#   python3 /data/awg/bot.py menu     прислать меню в чат и выйти (проверка)
+#
+# Один бот может обслуживать несколько роутеров в одном чате. Каждый роутер опрашивает Telegram сам
+# (короткий опрос раз в ~2 с, без «съедания» свежих обновлений), кнопки несут имя роутера, и на кнопку
+# отвечает только тот роутер, чьё имя в ней. Команды текстом: /status — ответят все роутеры,
+# /status DR7 — только DR7. Команды-действия (/main, /backup, /auto, /stop) переспрашивают кнопкой.
+#
+# Слушает только чат TG_CHAT из telegram.env. Токен не попадает в список процессов (передаётся curl через stdin).
+# Управление сторожем — через файл /data/awg/control (MODE, OFF_ACTION, DISABLED), сторож читает его каждые 5 с.
+import json
+import os
+import random
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+DD = os.environ.get('DD', '/data/awg')
+CTL = os.path.join(DD, 'control')
+LOGF = os.path.join(DD, 'bot.log')
+TGENV = os.path.join(DD, 'telegram.env')
+
+def envfile(path):
+    d = {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                m = re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line.rstrip('\n'))
+                if m:
+                    v = m.group(2).strip()
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
+                        v = v[1:-1]
+                    d[m.group(1)] = v
+    except OSError:
+        pass
+    return d
+
+TG = envfile(TGENV)
+AW = envfile(os.path.join(DD, 'awg.env'))
+TOKEN = TG.get('TG_TOKEN', '')
+CHAT = str(TG.get('TG_CHAT', ''))
+MAIN = AW.get('MAIN') or 'awgmain'
+BACKUP = AW.get('BACKUP', '')
+TUNS = [t for t in (MAIN, BACKUP) if t]
+NAME = TG.get('ROUTER_NAME') or socket.gethostname()
+TAG = re.sub(r'[^\w]+', '_', NAME, flags=re.UNICODE).strip('_') or 'router'
+IFACES = TUNS + ([] if TG.get('TG_NO_WAN') == '1' else [''])
+_good = {'i': None}
+
+def log(msg):
+    try:
+        line = time.strftime('%F %T ') + msg + '\n'
+        with open(LOGF, 'a', encoding='utf-8') as f:
+            f.write(line)
+        if os.path.getsize(LOGF) > 200000:
+            with open(LOGF, encoding='utf-8') as f:
+                tail = f.readlines()[-500:]
+            with open(LOGF, 'w', encoding='utf-8') as f:
+                f.writelines(tail)
+    except OSError:
+        pass
+
+def api(method, params=None, timeout=12):
+    """Вызов Bot API через curl: сначала канал, который сработал в прошлый раз, потом остальные."""
+    order = ([_good['i']] if _good['i'] in IFACES else []) + [i for i in IFACES if i != _good['i']]
+    args_tail = []
+    for k, v in (params or {}).items():
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v, ensure_ascii=False)
+        args_tail += ['--data-urlencode', '%s=%s' % (k, v)]
+    for i in order:
+        cmd = ['curl', '-4', '-s', '-m', str(timeout), '-K', '-', '-w', '\n%{http_code}']
+        if i:
+            cmd += ['--interface', i]
+        try:
+            p = subprocess.run(cmd + args_tail, input='url = "https://api.telegram.org/bot%s/%s"\n' % (TOKEN, method),
+                               capture_output=True, text=True, timeout=timeout + 5)
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        body, _, code = p.stdout.rpartition('\n')
+        if code == '409':
+            return {'ok': False, 'error_code': 409}
+        if code in ('', '000'):
+            continue
+        _good['i'] = i
+        try:
+            return json.loads(body)
+        except ValueError:
+            return {'ok': False, 'error_code': int(code) if code.isdigit() else 0}
+    return None
+
+def esc(s):
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+def header():
+    return '🛜 <b>#%s</b>\n' % esc(TAG)
+
+def sh(*args, timeout=60):
+    try:
+        return subprocess.run(list(args), capture_output=True, text=True, timeout=timeout).stdout
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return 'ошибка: %s' % e
+
+def notify_text(kind):
+    return sh(os.path.join(DD, 'awg-notify.sh'), 'text', kind, timeout=120).strip() or '<i>нет данных</i>'
+
+# ---------- управление сторожем ----------
+def ctl_read():
+    c = envfile(CTL)
+    mode = c.get('MODE', 'auto')
+    if mode not in ('auto', 'main', 'backup', 'off'):
+        mode = 'auto'
+    off = c.get('OFF_ACTION', 'block')
+    dis = [x for x in c.get('DISABLED', '').split() if x in TUNS]
+    return mode, off, dis
+
+def ctl_write(mode, off, dis):
+    tmp = CTL + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('# пишет бот Telegram (awg-bot); читает сторож failover.sh каждые 5 с\n')
+        f.write('MODE=%s\nOFF_ACTION=%s\nDISABLED="%s"\n' % (mode, off, ' '.join(dis)))
+    os.replace(tmp, CTL)
+    log('control: MODE=%s OFF_ACTION=%s DISABLED=%s' % (mode, off, ' '.join(dis)))
+
+def active():
+    out = sh('ip', 'route', 'show', 'table', AW.get('TABLE', '0'), timeout=10)
+    for line in out.splitlines():
+        m = re.match(r'default dev (\S+)', line)
+        if m and m.group(1) in TUNS:
+            return m.group(1)
+    return None
+
+def wait_applied(check, sec=15):
+    for _ in range(sec * 2):
+        if check():
+            return True
+        time.sleep(0.5)
+    return False
+
+def report_time():
+    return envfile(TGENV).get('REPORT_TIME', '0900')
+
+def set_report_time(v):
+    lines = []
+    try:
+        with open(TGENV, encoding='utf-8') as f:
+            lines = [ln for ln in f if not ln.startswith('REPORT_TIME=')]
+    except OSError:
+        pass
+    lines.append('REPORT_TIME=%s\n' % v)
+    tmp = TGENV + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, TGENV)
+    log('REPORT_TIME=%s' % v)
+
+def rt_label(v):
+    return 'по запросу' if v == 'off' else '%s:%s' % (v[:2], v[2:])
+
+# ---------- кнопки ----------
+def b(text, action):
+    return {'text': text, 'callback_data': ('%s|%s' % (TAG, action))[:64]}
+
+def menu_kb():
+    mode, off, dis = ctl_read()
+    mk = lambda m: '✓ ' if mode == m else ''
+    rows = [
+        [b('ℹ️ Статус', 'status'), b('📊 Отчёт', 'report')],
+        [b(mk('main') + '🟢 Основной', 'mode:main')] + ([b(mk('backup') + '🟡 Запасной', 'mode:backup')] if BACKUP else []) + [b(mk('auto') + '🤖 Авто', 'mode:auto')],
+        [b('⏹ Остановить…', 'stopask'), b('▶️ Запустить всё', 'start')],
+        [b('📜 Журнал', 'log'), b('🌐 IP', 'ip'), b('🩺 Аудит', 'check')],
+        [b('⏰ Отчёт: ' + rt_label(report_time()), 'rt')],
+    ]
+    return {'inline_keyboard': rows}
+
+def back_kb():
+    return {'inline_keyboard': [[b('☰ Меню', 'menu'), b('ℹ️ Статус', 'status')]]}
+
+def send(text, kb=None):
+    p = {'chat_id': CHAT, 'text': header() + text, 'parse_mode': 'HTML', 'disable_web_page_preview': 'true'}
+    if kb:
+        p['reply_markup'] = kb
+    r = api('sendMessage', p)
+    if not r or not r.get('ok'):
+        log('sendMessage не удалось: %s' % (r and r.get('description') or 'нет связи'))
+
+def mode_line():
+    mode, off, dis = ctl_read()
+    t = {'auto': '🤖 авто', 'main': '🟢 вручную: держать %s' % MAIN, 'backup': '🟡 вручную: держать %s' % BACKUP,
+         'off': '⛔ каналы остановлены, PBR %s' % ('через провайдера' if off == 'wan' else 'заблокирован')}[mode]
+    if dis:
+        t += '; ⏸ остановлены: ' + ', '.join(dis)
+    return 'Режим: ' + t
+
+# ---------- действия ----------
+def do_info(kind):
+    titles = {'status': 'ℹ️ Статус', 'report': '📊 Отчёт по запросу', 'log': '📜 Журнал сторожа',
+              'ip': '🌐 Внешние IP', 'check': '🩺 Аудит'}
+    if kind in ('check', 'ip', 'report'):
+        send('<i>%s: собираю…</i>' % titles[kind])
+    send('<b>%s</b> · %s\n%s' % (titles[kind], time.strftime('%F %H:%M'), notify_text(kind)), back_kb())
+
+def do_mode(m):
+    mode, off, dis = ctl_read()
+    if m == 'backup' and not BACKUP:
+        return send('Запасного канала нет.', back_kb())
+    want = MAIN if m == 'main' else BACKUP if m == 'backup' else None
+    if want and want in dis:
+        dis = [x for x in dis if x != want]
+    ctl_write(m, off, dis)
+    if want:
+        ok = wait_applied(lambda: active() == want)
+        txt = ('Переключено на <b>%s</b>. Держу его, пока он жив; при сбое сторож всё равно уйдёт на другой канал. '
+               'Вернуть автоматику — «🤖 Авто».' % want) if ok else (
+               'Режим «держать %s» включён, но канал не прошёл проверку: трафик остаётся на %s.' % (want, active() or 'blackhole'))
+    else:
+        wait_applied(lambda: active() is not None, 10)
+        txt = 'Автоматический режим: основной %s, при сбое — запасной, возврат после стабильной работы.' % MAIN
+    send(txt + '\n' + notify_text('status'), menu_kb())
+
+def do_stopask():
+    rows = [[b('⛔ Все каналы: блокировать PBR', 'stop:block')],
+            [b('🌐 Все каналы: PBR через провайдера', 'stop:wan')]]
+    for t in TUNS:
+        rows.append([b('⏸ Только %s' % t, 'dis:%s' % t)])
+    rows.append([b('✖ Отмена', 'menu')])
+    send('<b>Что остановить?</b>\n'
+         '⛔ — туннели выключаются, устройства под правилами PBR остаются без интернета (утечки нет).\n'
+         '🌐 — туннели выключаются, устройства под правилами ходят напрямую через провайдера.\n'
+         '⏸ — останавливается один канал, трафик идёт через другой.', {'inline_keyboard': rows})
+
+def do_stop(how):
+    mode, off, dis = ctl_read()
+    ctl_write('off', how, dis)
+    wait_applied(lambda: active() is None, 12)
+    send('⏹ Каналы остановлены: PBR-трафик %s.\nЗапустить снова — «▶️ Запустить всё».\n%s' % (
+        'идёт через провайдера' if how == 'wan' else 'заблокирован', notify_text('status')), menu_kb())
+
+def do_disable(t):
+    mode, off, dis = ctl_read()
+    if t not in TUNS:
+        return
+    if t not in dis:
+        dis.append(t)
+    if mode == ('main' if t == MAIN else 'backup'):
+        mode = 'auto'
+    ctl_write(mode, off, dis)
+    left = [x for x in TUNS if x not in dis]
+    wait_applied(lambda: active() in left if left else active() is None, 15)
+    extra = '' if left else ' Других каналов нет: PBR-трафик %s.' % ('идёт через провайдера' if off == 'wan' else 'заблокирован')
+    send('⏸ Канал <b>%s</b> остановлен.%s\n%s' % (t, extra, notify_text('status')), menu_kb())
+
+def do_start():
+    mode, off, dis = ctl_read()
+    ctl_write('auto' if mode == 'off' else mode, off, [])
+    wait_applied(lambda: active() is not None, 40)
+    send('▶️ Каналы запущены.\n' + notify_text('status'), menu_kb())
+
+def do_rt_menu():
+    rows = [[b('Только по запросу', 'rt:off')],
+            [b('07:00', 'rt:0700'), b('08:00', 'rt:0800'), b('09:00', 'rt:0900')],
+            [b('12:00', 'rt:1200'), b('18:00', 'rt:1800'), b('21:00', 'rt:2100')],
+            [b('✖ Отмена', 'menu')]]
+    send('<b>⏰ Суточный отчёт</b>\nСейчас: %s. Другое время — командой <code>/reporttime 0930 %s</code>.' % (
+        rt_label(report_time()), esc(TAG)), {'inline_keyboard': rows})
+
+def do_rt(v):
+    if v != 'off' and not re.match(r'^([01]\d|2[0-3])[0-5]\d$', v):
+        return send('Время — в виде ЧЧММ, например 0930, или off.', back_kb())
+    set_report_time(v)
+    send('⏰ Суточный отчёт: <b>%s</b>.%s' % (rt_label(v), ' Получить отчёт можно кнопкой «📊 Отчёт».' if v == 'off' else ''), menu_kb())
+
+def do_menu():
+    send('<b>Управление</b> · ' + esc(mode_line()) + '\nАктивный канал: <b>%s</b>' % (active() or 'нет'), menu_kb())
+
+def do_confirm(action):
+    names = {'mode:main': 'держать основной %s' % MAIN, 'mode:backup': 'держать запасной %s' % BACKUP,
+             'mode:auto': 'автоматический режим', 'stopask': 'остановку каналов', 'start': 'запуск всех каналов'}
+    send('Применить %s на этом роутере?' % names.get(action, action),
+         {'inline_keyboard': [[b('✅ Да', action), b('✖ Нет', 'menu')]]})
+
+ACTIONS = {'status': lambda: do_info('status'), 'report': lambda: do_info('report'), 'log': lambda: do_info('log'),
+           'ip': lambda: do_info('ip'), 'check': lambda: do_info('check'), 'menu': do_menu, 'stopask': do_stopask,
+           'start': do_start, 'rt': do_rt_menu}
+
+def run_action(a):
+    try:
+        if a in ACTIONS:
+            ACTIONS[a]()
+        elif a.startswith('mode:'):
+            do_mode(a[5:])
+        elif a.startswith('stop:'):
+            do_stop('wan' if a[5:] == 'wan' else 'block')
+        elif a.startswith('dis:'):
+            do_disable(a[4:])
+        elif a.startswith('rt:'):
+            do_rt(a[3:])
+    except Exception as e:  # бот не должен падать из-за одной команды
+        log('ошибка в %s: %r' % (a, e))
+        send('Ошибка при выполнении: <code>%s</code>' % esc(repr(e)[:300]), back_kb())
+
+def bg(a):
+    threading.Thread(target=run_action, args=(a,), daemon=True).start()
+
+# ---------- разбор обновлений ----------
+INFO_CMDS = {'status', 'report', 'log', 'ip', 'check', 'menu'}
+ACT_CMDS = {'main': 'mode:main', 'backup': 'mode:backup', 'auto': 'mode:auto', 'stop': 'stopask', 'start_all': 'start'}
+
+def handle_message(m):
+    if str(m.get('chat', {}).get('id')) != CHAT:
+        return
+    text = (m.get('text') or '').strip()
+    if not text.startswith('/'):
+        return
+    parts = text.split()
+    cmd = parts[0][1:].split('@')[0].lower()
+    args = parts[1:]
+    targets = [a.lstrip('#') for a in args if not re.match(r'^(\d{4}|off)$', a)]
+    if targets and not any(t.lower() in (TAG.lower(), 'all', 'все') for t in targets):
+        return   # команда другому роутеру
+    if cmd in ('start', 'help'):
+        cmd = 'menu'
+    if cmd in INFO_CMDS:
+        bg(cmd)
+    elif cmd in ACT_CMDS:
+        if targets:
+            bg(ACT_CMDS[cmd])
+        else:
+            do_confirm(ACT_CMDS[cmd])
+    elif cmd == 'reporttime':
+        v = next((a for a in args if re.match(r'^(\d{4}|off)$', a)), '')
+        bg('rt:' + v if v else 'rt')
+
+def handle_callback(c):
+    data = c.get('data') or ''
+    tag, _, action = data.partition('|')
+    if tag != TAG:
+        return   # кнопка другого роутера
+    if str(c.get('message', {}).get('chat', {}).get('id')) != CHAT:
+        return
+    api('answerCallbackQuery', {'callback_query_id': c.get('id'), 'text': 'принято'})
+    bg(action)
+
+def set_commands():
+    cmds = [('menu', 'меню с кнопками'), ('status', 'состояние каналов'), ('report', 'отчёт сейчас'),
+            ('log', 'журнал сторожа'), ('ip', 'внешние IP'), ('check', 'аудит установки'),
+            ('main', 'держать основной канал'), ('backup', 'держать запасной канал'), ('auto', 'автоматический режим'),
+            ('stop', 'остановить каналы'), ('start_all', 'запустить все каналы'), ('reporttime', 'время суточного отчёта')]
+    api('setMyCommands', {'commands': [{'command': a, 'description': d} for a, d in cmds]})
+
+def main():
+    if not TOKEN or not CHAT:
+        print('нет TG_TOKEN/TG_CHAT в %s' % TGENV)
+        sys.exit(2)
+    if len(sys.argv) > 1 and sys.argv[1] == 'menu':
+        do_menu()
+        return
+    log('старт: роутер #%s, чат %s' % (TAG, CHAT))
+    # всё, что пришло до старта, пропускаем
+    last = 0
+    for _ in range(10):
+        r = api('getUpdates', {'timeout': 0})
+        if r and r.get('ok'):
+            last = max([u['update_id'] for u in r['result']] or [0])
+            break
+        time.sleep(3 + random.random() * 3)
+    set_commands()
+    seen = {}           # update_id → когда впервые увидели; подтверждаем Telegram только старые (>10 мин),
+    last_prune = 0      # чтобы другие роутеры с этим же ботом успели их прочитать
+    while True:
+        r = api('getUpdates', {'timeout': 0, 'allowed_updates': ['message', 'callback_query']})
+        now = time.time()
+        if r is None:
+            time.sleep(10)
+            continue
+        if r.get('error_code') == 409:     # вебхук или одновременный опрос с другого роутера
+            time.sleep(0.5 + random.random())
+            continue
+        for u in sorted(r.get('result', []), key=lambda x: x['update_id']):
+            uid = u['update_id']
+            seen.setdefault(uid, now)
+            if uid <= last:
+                continue
+            last = uid
+            try:
+                if 'message' in u:
+                    handle_message(u['message'])
+                elif 'callback_query' in u:
+                    handle_callback(u['callback_query'])
+            except Exception as e:
+                log('ошибка обработки %s: %r' % (uid, e))
+        if now - last_prune > 60:
+            old = [k for k, t in seen.items() if now - t > 600]
+            if old:
+                api('getUpdates', {'offset': max(old) + 1, 'timeout': 0, 'limit': 1})
+                for k in old:
+                    seen.pop(k, None)
+            last_prune = now
+        time.sleep(2 + random.random() * 0.6)
+
+if __name__ == '__main__':
+    main()
+EOF
+chmod 700 /data/awg/bot.py
+```
+
+**Роутер** · служба и первое меню
+
+```bash
+cat > /data/awg/awg-bot.service <<'EOF'
+[Unit]
+Description=AWG: Telegram bot (status, report, switching and stopping channels)
+After=network-online.target awg-failover.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /data/awg/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+touch /data/awg/.bot
+cp /data/awg/awg-bot.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now awg-bot
+python3 /data/awg/bot.py menu
+```
+
+| Кнопка / команда                                     | Что делает                                                                                 |
+|------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| ℹ️ Статус · `/status`                                | режим, активный канал, handshake; 🟢 активный, ⚪ жив и ждёт, 🔴 не отвечает, ⏸ остановлен |
+| 📊 Отчёт · `/report`                                 | отчёт сейчас: трафик, события, журнал, система                                             |
+| 🟢 Основной / 🟡 Запасной · `/main`, `/backup`       | держать выбранный канал до команды «Авто»; если он умрёт, сторож всё равно уйдёт на другой |
+| 🤖 Авто · `/auto`                                    | обычная автоматика: основной, при сбое запасной, возврат после стабильной работы           |
+| ⏹ Остановить… · `/stop`                              | все каналы — блокировать PBR или пустить через провайдера; или только один канал           |
+| ▶️ Запустить всё · `/start_all`                      | включить остановленные каналы и автоматику                                                 |
+| 📜 Журнал, 🌐 IP, 🩺 Аудит · `/log`, `/ip`, `/check` | последние события сторожа, внешние IP туннелей и WAN, сводка `awg-audit`                   |
+| ⏰ Отчёт · `/reporttime 0930`, `/reporttime off`     | время суточного отчёта или «только по запросу»                                             |
+
+Ручной режим хранится в `/data/awg/control` и переживает перезагрузку. Сбросить его вручную: `rm /data/awg/control`.
+
+> [!NOTE]
+> **Несколько роутеров на одном боте**
+>
+> Поставьте на каждый роутер тот же токен и chat id, но своё `ROUTER_NAME`. Каждое сообщение начинается с хэштега роутера, кнопки адресованы своему роутеру. Текстовая команда без имени (`/status`) — ответят все, с именем (`/status DR7`) — только он; команды-действия без имени каждый роутер переспрашивает кнопкой. В группе управлять могут все её участники.
 
 <a name="ui"></a>
 
@@ -2685,7 +3277,7 @@ for u in awg-self awg-subnets; do
 done
 [ -x $D/self.sh ] && $D/self.sh remove >/dev/null 2>&1
 [ -x $D/subnets.sh ] && $D/subnets.sh remove >/dev/null 2>&1
-for u in awg-notify awg-failover awg-motd; do
+for u in awg-bot awg-notify awg-failover awg-motd; do
   systemctl disable --now $u 2>/dev/null
   rm -f /etc/systemd/system/$u.service
 done
@@ -2832,6 +3424,8 @@ EOF
 | `audit.sh`                                                            | Аудит `awg-audit`                                                                               | 9     |
 | `telegram.env` 🔒, `notify.sh`, `awg-notify.sh`, `awg-notify.service` | Уведомления; `notify.log`, `notify.spool`, `notify.events`, `notify.state` — их служебные файлы | 10    |
 | `self.sh`, `awg-self.service`                                         | Site Manager и собственный трафик роутера через AWG (ставит `awg-ui-fix.sh`)                    | 11    |
+| `bot.py`, `awg-bot.service`, `.bot`, `bot.log`                        | Бот управления из Telegram и его журнал                                                         | 10    |
+| `control`                                                             | Ручной режим сторожа: `MODE`, `OFF_ACTION`, `DISABLED` (пишет бот)                              | 10    |
 | `awg-restore.sh`                                                      | Восстановление автозапуска после обновления прошивки                                            | 5     |
 | `awg-uninstall.sh`                                                    | Полное удаление                                                                                 | 12    |
 | `install.sh`, `install.log`, `.installer`, `.panel`, `.audit`         | Установщик и его журнал; отметки компонентов, выбранных в установщике                           | ⚡    |

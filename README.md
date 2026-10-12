@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=5">
-  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=5" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=6">
+  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=6" width="100%">
 </picture>
 
 <a href="GUIDE.md">
@@ -71,6 +71,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) uninstall
 ```
 
+## 🤖 Управление из Telegram
+
+Уведомления приходят с именем роутера первой строкой (`🛜 #DR7`) — по хэштегу видны сообщения одного роутера, если их несколько. Бот `awg-bot` (включается в установщике: «Компоненты» → «Бот Telegram») отвечает кнопками и командами в том же чате:
+
+| Кнопка · команда | Что делает |
+|---|---|
+| ℹ️ Статус · `/status` | режим и каналы: 🟢 активный, ⚪ ждёт, 🔴 не отвечает, ⏸ остановлен |
+| 📊 Отчёт · `/report` | отчёт сейчас (суточный по расписанию можно выключить: `/reporttime off`) |
+| 🟢 Основной · 🟡 Запасной · 🤖 Авто | держать выбранный канал до «Авто»; при его падении сторож всё равно спасается на другой |
+| ⏹ Остановить… · ▶️ Запустить всё | все каналы (блокировать PBR-трафик или пустить через провайдера) или один канал |
+| 📜 Журнал · 🌐 IP · 🩺 Аудит | события сторожа, внешние IP, сводка `awg-audit` |
+
+Несколько роутеров могут работать с одним ботом в одном чате: у каждого своё `ROUTER_NAME`, кнопки адресованы своему роутеру, `/status DR7` — команда одному. Подробно — в [части 10 гайда](GUIDE.md#p10).
+
 ## ✅ Что мастер проверяет
 
 <details>
@@ -113,7 +127,8 @@ awg/                  файлы роутера → /data/awg
   awg-detect.sh         найти таблицу, метку, профиль PBR → awg.env
   status.sh             панель (awgs)
   audit.sh              аудит (awg-audit)
-  notify.sh, awg-notify.sh   Telegram
+  notify.sh, awg-notify.sh   Telegram: отправка и уведомления
+  bot.py, awg-bot.service    бот управления из Telegram
   awg-restore.sh        восстановление после обновления прошивки
   awg-uninstall.sh      удаление
   *.service             юниты systemd (копии в /data/awg)

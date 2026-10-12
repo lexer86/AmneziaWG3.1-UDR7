@@ -10,12 +10,14 @@ NOTIFY=0; MOTD=0
 SUBN=0; SELF=0
 [ -f "$D/awg-subnets.service" ] && [ -x "$D/subnets.sh" ] && grep -q '^EXTRA_SUBNETS="\?[0-9]' "$D/awg.env" 2>/dev/null && { SUBN=1; cp "$D/awg-subnets.service" /etc/systemd/system/; }
 [ -f "$D/awg-self.service" ] && [ -x "$D/self.sh" ] && { SELF=1; cp "$D/awg-self.service" /etc/systemd/system/; }
+BOT=0; [ -f "$D/awg-bot.service" ] && [ -f "$D/.bot" ] && [ -f "$D/telegram.env" ] && { BOT=1; cp "$D/awg-bot.service" /etc/systemd/system/; }
 systemctl daemon-reload
 systemctl enable --now awg-failover
 [ $NOTIFY = 1 ] && systemctl enable --now awg-notify
 [ $MOTD = 1 ] && systemctl enable --now awg-motd
 [ $SUBN = 1 ] && systemctl enable --now awg-subnets
 [ $SELF = 1 ] && systemctl enable --now awg-self
+[ $BOT = 1 ] && systemctl enable --now awg-bot
 # панель и команды возвращаются, только если соответствующая часть ставилась
 # установщик отмечает выбранные компоненты файлами .panel/.audit; при ручной установке по гайду
 # признак — наличие самих скриптов

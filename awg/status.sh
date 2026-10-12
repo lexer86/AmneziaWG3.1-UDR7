@@ -127,7 +127,11 @@ temp=""; for z in /sys/class/thermal/thermal_zone*/temp; do [ -r "$z" ] && { tem
 wan=$(ip -4 -br addr show "$WANIF" 2>/dev/null | awk '{print $2, $3}')
 echo " Нагрузка : ${load:-?} · RAM ${mem:-?} · /data ${disk:-?}${temp}"
 echo " WAN $WANIF : ${wan:-нет данных}"
-if systemctl is-enabled awg-notify >/dev/null 2>&1; then echo " Telegram : awg-notify $(systemctl is-active awg-notify 2>/dev/null)"; fi
+if systemctl is-enabled awg-notify >/dev/null 2>&1; then echo " Telegram : awg-notify $(systemctl is-active awg-notify 2>/dev/null)$(systemctl is-enabled awg-bot >/dev/null 2>&1 && echo ", бот awg-bot $(systemctl is-active awg-bot 2>/dev/null)")"; fi
+if [ -r "$DD/control" ]; then
+  cm=$(sed -n 's/^MODE=//p' "$DD/control" | tr -d '"'); cd_=$(sed -n 's/^DISABLED=//p' "$DD/control" | tr -d '"')
+  { [ -n "$cm" ] && [ "$cm" != auto ]; } || [ -n "$cd_" ] && echo " ${Y}Ручной режим${N} : ${cm:-auto}${cd_:+, остановлены: $cd_} (бот; сброс — rm $DD/control)"
+fi
 
 echo
 hdr "EVENTS (last 20)"

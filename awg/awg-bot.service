@@ -1,0 +1,12 @@
+[Unit]
+Description=AWG: Telegram bot (status, report, switching and stopping channels)
+After=network-online.target awg-failover.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /data/awg/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

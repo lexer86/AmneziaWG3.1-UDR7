@@ -13,7 +13,7 @@ for u in awg-self awg-subnets; do
 done
 [ -x $D/self.sh ] && $D/self.sh remove >/dev/null 2>&1
 [ -x $D/subnets.sh ] && $D/subnets.sh remove >/dev/null 2>&1
-for u in awg-notify awg-failover awg-motd; do
+for u in awg-bot awg-notify awg-failover awg-motd; do
   systemctl disable --now $u 2>/dev/null
   rm -f /etc/systemd/system/$u.service
 done

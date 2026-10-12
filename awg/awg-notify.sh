@@ -1,8 +1,9 @@
 #!/bin/bash
 # awg-notify.sh — уведомления в Telegram о работе failover.
 #   awg-notify.sh          демон (запускает systemd: awg-notify.service)
-#   awg-notify.sh report   отправить суточный отчёт сейчас
+#   awg-notify.sh report   отправить отчёт сейчас
 #   awg-notify.sh test     тестовое сообщение со снимком состояния
+#   awg-notify.sh text status|report|log|ip|check   напечатать текст (HTML) для бота, ничего не отправляя
 export LC_ALL=C.UTF-8
 DD=${DD:-/data/awg}
 AWG=$DD/awg
@@ -13,7 +14,9 @@ LASTREP=$DD/notify.lastreport
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 [ -r "$DD/telegram.env" ] && . "$DD/telegram.env"
 TABLE=${TABLE:-0}; MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
-REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера (можно задать в telegram.env)
+REPORT_TIME=${REPORT_TIME:-0900}   # время суточного отчёта ЧЧММ по часам роутера; off — только по запросу (telegram.env)
+CTL=$DD/control                    # ручной режим сторожа: MODE, OFF_ACTION, DISABLED (пишет бот)
+BASET=$DD/notify.basetime          # с какого момента считается трафик в отчёте
 
 # ---------- утилиты ----------
 esc()  { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
@@ -42,6 +45,25 @@ active() {
   r=$(ip route show table "$TABLE" 2>/dev/null | awk '$1=="default" && /dev awg/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
   echo "${r:-none}"
 }
+# shellcheck disable=SC1090
+ctl() { MODE=auto; OFF_ACTION=block; DISABLED=""; [ -r "$CTL" ] && . "$CTL"; }
+enabled() { case " $DISABLED " in *" $1 "*) return 1;; esac; }
+mode_text() {
+  ctl
+  case "$MODE" in
+    auto)   printf 'авто' ;;
+    main)   printf 'вручную: держать %s' "$MAIN" ;;
+    backup) printf 'вручную: держать %s' "$BACKUP" ;;
+    off)    if [ "$OFF_ACTION" = wan ]; then printf 'каналы остановлены, PBR через провайдера'; else printf 'каналы остановлены, PBR заблокирован'; fi ;;
+  esac
+  [ -n "$DISABLED" ] && printf '; остановлены: %s' "$DISABLED"
+}
+dot() {   # значок канала: 🟢 активный, ⚪ жив и ждёт, 🔴 не отвечает, ⏸ остановлен вручную
+  local t=$1 a=$2 h
+  enabled "$t" || { printf '⏸'; return; }
+  [ "$t" = "$a" ] && { printf '🟢'; return; }
+  h=$(hs_age "$t"); if [ "$h" -ge 0 ] && [ "$h" -lt 300 ]; then printf '⚪'; else printf '🔴'; fi
+}
 extip() {
   local ip u
   [ "$1" = none ] && { echo "-"; return; }
@@ -52,16 +74,21 @@ extip() {
   echo "-"
 }
 health() {   # $1=active $2=возраст handshake основного $3=запасного
+  ctl
   if ! systemctl is-active --quiet awg-failover; then echo "CRITICAL: сторож awg-failover не работает"
+  elif [ "$MODE" = off ]; then echo "STOPPED: каналы остановлены вручную"
   elif [ "$1" = none ]; then echo "CRITICAL: нет AWG-маршрута в таблице PBR"
+  elif [ -n "$BACKUP" ] && [ "$1" = "$BACKUP" ] && [ "$MODE" = backup ]; then echo "MANUAL: запасной канал выбран вручную"
   elif [ -n "$BACKUP" ] && [ "$1" = "$BACKUP" ]; then echo "DEGRADED: работаем на запасном канале"
+  elif [ -n "$BACKUP" ] && ! enabled "$BACKUP"; then echo "MANUAL: запасной канал остановлен вручную"
   elif [ -n "$BACKUP" ] && { [ "$3" -lt 0 ] || [ "$3" -gt 300 ]; }; then echo "DEGRADED: запасной канал не отвечает"
   else echo "HEALTHY"; fi
 }
 snapshot() {
-  local a t; a=$(active)
-  echo "Активный канал : $a"
-  for t in $TUNS; do printf '%-14s : handshake %s\n' "$t" "$(fa "$(hs_age "$t")")"; done
+  local a t; a=$(active); ctl
+  echo "Режим          : $(mode_text)"
+  echo "Активный канал : ${a/none/нет}"
+  for t in $TUNS; do printf '%s %-12s : handshake %s\n' "$(dot "$t" "$a")" "$t" "$(fa "$(hs_age "$t")")"; done
   echo "Внешний IP     : $(extip "$a")"
   echo "Время роутера  : $(date '+%F %T')"
 }
@@ -82,23 +109,26 @@ delta() {
   [ "$cur" -lt "$base" ] && base=0     # интерфейс пересоздавался
   echo $((cur - base))
 }
-save_base() { local i; for i in $TUNS; do echo "$i $(cnt "$i" rx) $(cnt "$i" tx)"; done > "$ST"; }
+save_base() { local i; for i in $TUNS; do echo "$i $(cnt "$i" rx) $(cnt "$i" tx)"; done > "$ST"; date '+%F %H:%M' > "$BASET"; }
 
 # ---------- суточный отчёт ----------
-report() {
-  local a m b ip up body journal evs t i
+report_body() {   # текст отчёта (HTML); трафик и события — с момента прошлого суточного сброса
+  local a m b ip up body journal evs t i since
+  since=$(cat "$BASET" 2>/dev/null || echo 'прошлого сброса')
   a=$(active); m=$(hs_age "$MAIN"); b=-1; [ -n "$BACKUP" ] && b=$(hs_age "$BACKUP"); ip=$(extip "$a")
   up=$(awk '{s=int($1); printf "%dд %dч %dм", s/86400, s%86400/3600, s%3600/60}' /proc/uptime)
   evs=$(grep -E 'ПЕРЕКЛЮЧЕНИЕ|ВОЗВРАТ|ВОССТАНОВЛЕН|не отвечает' "$LOGF" 2>/dev/null | tail -5 | trunc 110)
   journal=$(tail -n 8 "$LOGF" 2>/dev/null | trunc 110)
   body=$(
     printf 'Состояние : %s\n' "$(health "$a" "$m" "$b")"
+    printf 'Режим     : %s\n' "$(mode_text)"
     printf 'Активный  : %s (внешний IP %s)\n' "$a" "$ip"
     printf 'Аптайм    : %s\n\n' "$up"
-    printf '%-10s %-10s %-10s %s\n' Tunnel RX-24h TX-24h handshake
+    printf '   %-10s %-10s %-10s %s\n' Tunnel RX TX handshake
     for i in $TUNS; do
-      printf '%-10s %-10s %-10s %s\n' "$i" "$(hum "$(delta "$i" rx)")" "$(hum "$(delta "$i" tx)")" "$(fa "$(hs_age "$i")")"
+      printf '%s %-10s %-10s %-10s %s\n' "$(dot "$i" "$a")" "$i" "$(hum "$(delta "$i" rx)")" "$(hum "$(delta "$i" tx)")" "$(fa "$(hs_age "$i")")"
     done
+    printf 'трафик с %s · 🟢 активный ⚪ ждёт 🔴 не отвечает ⏸ остановлен\n' "$since"
     printf '\nСобытия за 24 ч:\n'
     if [ -n "$BACKUP" ]; then
       printf '  переключений на запасной: %s\n' "$(evcount switch)"
@@ -120,26 +150,34 @@ report() {
     printf '  процессов amneziawg-go: %s\n' "$(pgrep -c amneziawg-go)"
     printf '  сбоев доставки в Telegram за 24 ч: %s\n' "$(awk -v s="$(date -d '24 hours ago' '+%F %T')" '($1" "$2)>=s && /не удалось/{n++} END{print n+0}' "$DD/notify.log" 2>/dev/null)"
   )
-  send "<b>📊 Суточный отчёт</b> · $(date '+%F')"$'\n'"<pre>$(printf '%s' "$body" | esc)</pre>"
-  save_base
-  [ -f "$EV" ] && tail -n 500 "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+  printf '%s' "<pre>$(printf '%s' "$body" | esc)</pre>"
+}
+report() {   # $1=daily — плановый суточный: после отправки счётчики трафика начинаются заново
+  local h="📊 Отчёт по запросу"; [ "$1" = daily ] && h="📊 Суточный отчёт"
+  send "<b>$h</b> · $(date '+%F %H:%M')"$'\n'"$(report_body)"
+  if [ "$1" = daily ]; then
+    save_base
+    [ -f "$EV" ] && tail -n 500 "$EV" > "$EV.t" && mv "$EV.t" "$EV"
+  fi
 }
 
 # ---------- реакция на строку журнала сторожа ----------
 last_both=0
 on_line() {
-  local l="$1" now title extra lastsw
+  local l="$1" now title extra lastsw ch
   now=$(date +%s)
   case "$l" in
     *ПЕРЕКЛЮЧЕНИЕ*)
       echo "$now|switch" >> "$EV"
-      title="⚠️ Переключение на запасной канал"
-      extra="Основной канал не проходит проверку. PBR-трафик идёт через $BACKUP." ;;
+      ch=$(printf '%s' "$l" | grep -oE 'awg[A-Za-z0-9_-]+' | head -1)
+      title="⚠️ Переключение на ${ch:-запасной канал}"
+      extra="Выбранный канал не проходит проверку. PBR-трафик идёт через ${ch:-$BACKUP}." ;;
     *ВОЗВРАТ*|*"возврат на"*)
       lastsw=$(awk -F'|' '$2=="switch"{t=$1} END{print t}' "$EV" 2>/dev/null)
       echo "$now|return" >> "$EV"
-      title="✅ Возврат на основной канал"
-      extra="PBR-трафик снова через $MAIN."
+      ch=$(printf '%s' "$l" | grep -oE 'awg[A-Za-z0-9_-]+' | tail -1)
+      title="✅ Возврат на ${ch:-$MAIN}"
+      extra="PBR-трафик снова через ${ch:-$MAIN}."
       [ -n "$lastsw" ] && extra="$extra На запасном проработали: $(fd $((now - lastsw)))." ;;
     *"оба канала не отвечают"*|*"единственный канал"*)
       [ $((now - last_both)) -lt 300 ] && return
@@ -173,21 +211,25 @@ chk() {   # $1=имя $2=1 если плохо $3=тревога $4=восста
   fi
 }
 monitor() {
-  local a bad
+  local a bad rt
   while sleep 60; do
-    if [ -n "$BACKUP" ]; then
+    ctl
+    if [ -n "$BACKUP" ] && enabled "$BACKUP" && [ "$MODE" != off ]; then
       a=$(hs_age "$BACKUP"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
       chk backup "$bad" "⚠️ Запасной канал потерян" "✅ Запасной канал восстановлен"
     fi
     a=$(hs_age "$MAIN"); bad=0; { [ "$a" -lt 0 ] || [ "$a" -gt 300 ]; } && bad=1
+    { ! enabled "$MAIN" || [ "$MODE" = off ]; } && bad=0
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
     bad=0; systemctl is-active --quiet awg-failover || bad=1
     chk svc "$bad" "🛑 awg-failover остановлен: автопереключения нет" "✅ awg-failover снова работает"
     # отложенные сообщения (например, о загрузке): отправляем, как только активный туннель снова жив
     [ -s "$DD/notify.spool" ] && tunnel_ready && "$DD/notify.sh" --flush >/dev/null 2>&1
-    if [ $((10#$(date +%H%M))) -ge $((10#$REPORT_TIME)) ] && [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
-      date +%F > "$LASTREP"
-      report
+    # время отчёта можно поменять из бота: перечитываем; off — только по запросу, счётчики сбрасываются в полночь
+    rt=$(sed -n 's/^REPORT_TIME=//p' "$DD/telegram.env" 2>/dev/null | tr -d '"' | tail -1); rt=${rt:-0900}
+    if [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
+      if [ "$rt" = off ]; then date +%F > "$LASTREP"; save_base
+      elif [[ "$rt" =~ ^[0-9]{4}$ ]] && [ $((10#$(date +%H%M))) -ge $((10#$rt)) ]; then date +%F > "$LASTREP"; report daily; fi
     fi
   done
 }
@@ -215,6 +257,19 @@ daemon() {
 
 case "${1:-daemon}" in
   report) report ;;
+  text)
+    case "$2" in
+      status) printf '%s' "<pre>$(snapshot | esc)</pre>" ;;
+      report) report_body ;;
+      log)    printf '%s' "<pre>$(tail -n 15 "$LOGF" 2>/dev/null | trunc 120 | esc)</pre>" ;;
+      ip)     { for t in $TUNS; do printf '%s %-10s : %s\n' "$(dot "$t" "$(active)")" "$t" "$(extip "$t")"; done
+                w=$(curl -4 -s -m 6 ${WANIF:+--interface "$WANIF"} https://api.ipify.org 2>/dev/null); printf '🌐 %-10s : %s\n' "WAN" "${w:--}"; } | esc | sed '1s/^/<pre>/;$s/$/<\/pre>/' ;;
+      check)  if [ -x "$DD/audit.sh" ]; then
+                o=$(NO_COLOR=1 "$DD/audit.sh" 2>&1)
+                printf '%s' "<pre>$( { echo "$o" | grep -E 'OK:.*WARN:.*FAIL:' | tail -1; echo "$o" | grep -E '^ *(WARN|FAIL) ' | head -15; } | trunc 150 | esc)</pre>"
+              else printf 'аудит не установлен'; fi ;;
+      *) echo "использование: $0 text status|report|log|ip|check"; exit 1 ;;
+    esac ;;
   test)   if send "<b>✅ Тест уведомлений</b>"$'\n'"<pre>$(snapshot | esc)</pre>"; then echo "отправлено"; else echo "ошибка, см. $DD/notify.log"; fi ;;
   daemon) daemon ;;
   *)      echo "использование: $0 [daemon|report|test]"; exit 1 ;;

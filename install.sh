@@ -13,7 +13,7 @@
 #         --uninstall удалить
 #         --help
 # ============================================================================
-INSTALLER_VERSION=1.1.4
+INSTALLER_VERSION=1.2.0
 AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz
@@ -926,6 +926,25 @@ tg_api(){  # tg_api МЕТОД [аргументы curl] — запрос к Tel
   done
   return 1
 }
+step_bot(){  # управление из Telegram: awg-bot (python3)
+  say
+  info "бот: кнопки и команды в Telegram — статус, отчёт по запросу, журнал, IP, аудит, переключение основной/запасной/авто, остановка всех или одного канала"
+  info "несколько роутеров могут жить на одном боте в одном чате: у каждого своё имя, кнопки адресованы своему роутеру"
+  if ! command -v python3 >/dev/null; then warn "на роутере нет python3 — бот недоступен"; return 0; fi
+  local bdef=Y; [ -f "$DD/awg-bot.service" ] && [ ! -f "$DD/.bot" ] && bdef=N
+  if yn "Включить управление из Telegram (бот)?" "$bdef"; then
+    touch "$DD/.bot"
+    cp "$DD/awg-bot.service" /etc/systemd/system/; systemctl daemon-reload
+    systemctl enable awg-bot >/dev/null 2>&1; systemctl restart awg-bot
+    sleep 3
+    if svc_active awg-bot; then ok "бот запущен: в чате напишите /menu (или нажмите «Меню» у бота)"; python3 "$DD/bot.py" menu >/dev/null 2>&1 && ok "меню отправлено в чат"
+    else err "awg-bot не запустился: journalctl -u awg-bot -n 20; tail $DD/bot.log"; fi
+  else
+    rm -f "$DD/.bot"; systemctl disable --now awg-bot >/dev/null 2>&1; rm -f /etc/systemd/system/awg-bot.service
+    info "бот выключен"
+  fi
+}
+
 step_telegram(){
   title "Уведомления в Telegram"
   local a r chat t
@@ -953,8 +972,14 @@ step_telegram(){
     [[ "$chat" =~ ^-?[0-9]+$ ]] || { err "chat id — это число"; chat=; TG_TOKEN=; continue; }
     TG_CHAT=$chat
   done
-  ask t "Время суточного отчёта ЧЧММ (по часам роутера, сейчас $(date +%H:%M))" "${REPORT_TIME:-0900}"
-  [[ "$t" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]] || { warn "формат ЧЧММ, ставлю 0900"; t=0900; }
+  local rdef=Y; [ "${REPORT_TIME:-}" = off ] && rdef=N
+  if yn "Присылать суточный отчёт по расписанию (иначе — только по запросу из бота)?" "$rdef"; then
+    t=${REPORT_TIME:-0900}; [ "$t" = off ] && t=0900
+    ask t "Время суточного отчёта ЧЧММ (по часам роутера, сейчас $(date +%H:%M))" "$t"
+    [[ "$t" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]] || { warn "формат ЧЧММ, ставлю 0900"; t=0900; }
+  else
+    t=off
+  fi
   local rn
   info "имя роутера стоит первой строкой каждого сообщения и работает как хэштег: если в один чат пишут несколько роутеров, по нему видны сообщения одного"
   ask rn "Имя роутера в сообщениях" "${ROUTER_NAME:-$(hostname)}"
@@ -969,7 +994,9 @@ step_telegram(){
   fi
   cp "$DD/awg-notify.service" /etc/systemd/system/; systemctl daemon-reload
   systemctl enable awg-notify >/dev/null 2>&1; systemctl restart awg-notify
-  svc_active awg-notify && ok "служба awg-notify запущена (события, контроль раз в минуту, отчёт в ${t:0:2}:${t:2:2})" || err "awg-notify не запустилась: journalctl -u awg-notify -n 20"
+  local rtxt="отчёт в ${t:0:2}:${t:2:2}"; [ "$t" = off ] && rtxt="отчёт по запросу"
+  svc_active awg-notify && ok "служба awg-notify запущена (события, контроль раз в минуту, $rtxt)" || err "awg-notify не запустилась: journalctl -u awg-notify -n 20"
+  step_bot
 }
 
 # ============================================================ мастер ======
@@ -1052,6 +1079,7 @@ do_update(){
   systemctl daemon-reload
   if svc_active awg-failover; then cp "$DD/awg-failover.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-failover; ok "сторож перезапущен"; fi
   if svc_active awg-notify; then cp "$DD/awg-notify.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-notify; ok "awg-notify перезапущен"; fi
+  if svc_active awg-bot; then cp "$DD/awg-bot.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-bot; ok "awg-bot перезапущен"; fi
   if svc_active awg-subnets; then cp "$DD/awg-subnets.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-subnets; ok "awg-subnets перезапущен"; fi
   [ -x "$DD/audit.sh" ] && "$DD/audit.sh" | tail -n 3
 }
@@ -1104,7 +1132,7 @@ do_diag(){
 do_components(){
   local a
   while :; do
-    choose a "Компоненты:" "Заменить конфиг основного туннеля" "Добавить/заменить запасной туннель на VPS" "Убрать запасной туннель" "Клиенты VPN-сервера роутера (подсети)" "Время возврата на основной канал" "Панель при входе по SSH" "Аудит" "Telegram" "Заново определить таблицу и метку PBR" "Назад"
+    choose a "Компоненты:" "Заменить конфиг основного туннеля" "Добавить/заменить запасной туннель на VPS" "Убрать запасной туннель" "Клиенты VPN-сервера роутера (подсети)" "Время возврата на основной канал" "Панель при входе по SSH" "Аудит" "Telegram" "Бот Telegram (управление кнопками)" "Заново определить таблицу и метку PBR" "Назад"
     case $a in
       1) rm -f "$DD/main.conf"; get_conf main.conf "новый конфиг основного туннеля"; bring_up_and_test "$MAIN" "основной туннель";;
       2) get_kit; install_files; env_set BACKUP "$BACKUP_NAME"; rm -f "$DD/backup.conf"; step_vps backup.conf; bring_up_and_test "$BACKUP_NAME" "запасной туннель"; step_watchdog; yn "Проверить переключение?" Y && test_switch;;
@@ -1114,8 +1142,9 @@ do_components(){
       6) step_panel;;
       7) step_audit;;
       8) step_telegram;;
-      9) step_rail; systemctl restart awg-failover; ok "сторож перезапущен";;
-      10) return;;
+      9) if [ -f "$DD/telegram.env" ]; then step_bot; else warn "сначала настройте Telegram (пункт 8)"; fi;;
+      10) step_rail; systemctl restart awg-failover; ok "сторож перезапущен";;
+      11) return;;
     esac
   done
 }

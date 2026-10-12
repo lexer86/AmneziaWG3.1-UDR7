@@ -7,6 +7,10 @@ AWG=${AWG:-$DD/awg}
 TABLE=${TABLE:-0}; MARK=${MARK:-0x0/0x0}; RAIL_IF=${RAIL_IF:-wgclt1}
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}; TUNS="$MAIN${BACKUP:+ $BACKUP}"
 NT=$(echo $TUNS | wc -w)
+# ручной режим из бота: остановленные каналы и MODE=off — не ошибка
+CMODE=auto; CDIS=""; if [ -r "$DD/control" ]; then CMODE=$(sed -n 's/^MODE=//p' "$DD/control" | tr -d '"'); CDIS=$(sed -n 's/^DISABLED=//p' "$DD/control" | tr -d '"'); fi
+CMODE=${CMODE:-auto}; for i in $CDIS; do NT=$((NT-1)); done
+stopped(){ case " $CDIS " in *" $1 "*) return 0;; esac; [ "$CMODE" = off ]; }
 ok=0; warn=0; bad=0
 if [ -t 1 ] && [ -z "$NO_COLOR" ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m'; else G=; R=; Y=; B=; N=; fi
 P(){ echo "  ${G}OK${N}    $1"; ok=$((ok+1)); }
@@ -24,9 +28,10 @@ sec "Службы и процессы"
 st=$(systemctl is-active awg-failover 2>/dev/null); en=$(systemctl is-enabled awg-failover 2>/dev/null)
 [ "$st" = active ] && P "awg-failover: active" || F "awg-failover: ${st:-нет}" "systemctl start awg-failover"
 [ "$en" = enabled ] && P "awg-failover: автозапуск включён" || W "awg-failover: автозапуск ${en:-нет}" "systemctl enable awg-failover"
-for u in awg-failover awg-notify awg-motd; do
+for u in awg-failover awg-notify awg-bot awg-motd; do
   [ -f "$DD/$u.service" ] || continue
   [ $u = awg-notify ] && [ ! -f "$DD/telegram.env" ] && continue   # Telegram не настраивался
+  [ $u = awg-bot ] && [ ! -f "$DD/.bot" ] && continue              # бот не включался
   [ $u = awg-motd ] && [ ! -f "$DD/motd.orig" ] && continue        # баннер не отключался
   cmp -s "/etc/systemd/system/$u.service" "$DD/$u.service" && P "$u.service совпадает с копией в $DD" \
     || W "$u.service в /etc отличается от копии в $DD или отсутствует" "cp $DD/$u.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now $u"
@@ -38,10 +43,16 @@ c=$(pgrep -c amneziawg-go 2>/dev/null); [ "${c:-0}" = "$NT" ] && P "процес
 if [ -f "$DD/telegram.env" ]; then
   [ "$(systemctl is-active awg-notify 2>/dev/null)" = active ] && P "awg-notify: active" || W "awg-notify не запущен" "systemctl enable --now awg-notify"
 fi
+if [ -f "$DD/.bot" ]; then
+  [ "$(systemctl is-active awg-bot 2>/dev/null)" = active ] && P "awg-bot: active (управление из Telegram)" || W "awg-bot не запущен" "systemctl enable --now awg-bot; tail $DD/bot.log"
+fi
+case "$CMODE" in auto) ;; off) W "каналы остановлены вручную (бот или $DD/control)" "в боте «▶️ Запустить всё» или rm $DD/control";; *) W "ручной режим: держать ${CMODE} (бот)" "в боте «🤖 Авто» или rm $DD/control";; esac
+[ -n "$CDIS" ] && W "остановлены вручную: $CDIS" "в боте «▶️ Запустить всё»"
 
 sec "Туннели"
-for i in $TUNS; do ip link show "$i" >/dev/null 2>&1 && P "$i существует" || F "$i отсутствует" "$DD/up.sh $i"; done
+for i in $TUNS; do stopped "$i" && { echo "  ·     $i остановлен вручную — пропускаю"; continue; }; ip link show "$i" >/dev/null 2>&1 && P "$i существует" || F "$i отсутствует" "$DD/up.sh $i"; done
 for i in $TUNS; do
+  stopped "$i" && continue
   a=$(age_s "$i")
   if [ "$a" -ge 0 ] && [ "$a" -lt 180 ]; then P "$i: handshake ${a}с назад"
   else W "$i: handshake давно или не было ($a)" "curl -s --interface $i https://ifconfig.me; $DD/awg show $i"; fi
@@ -54,7 +65,7 @@ n=$(ip rule show | grep -c "fwmark ${MARK%%/*}")
 t=$(ip route show table "$TABLE" 2>/dev/null)
 echo "        таблица $TABLE:"; echo "$t" | sed 's/^/          /'
 c=$(echo "$t" | grep -c 'dev awg')
-[ "$c" = 1 ] && P "в таблице PBR ровно один AWG-маршрут" || { [ "$c" = 0 ] && F "в таблице PBR нет AWG-маршрута" "systemctl restart awg-failover" || W "AWG-маршрутов в таблице: $c (нужен 1)" "systemctl restart awg-failover"; }
+if [ "$CMODE" = off ]; then echo "  ·     каналы остановлены вручную: AWG-маршрута в таблице нет, так и задумано"; else [ "$c" = 1 ] && P "в таблице PBR ровно один AWG-маршрут" || { [ "$c" = 0 ] && F "в таблице PBR нет AWG-маршрута" "systemctl restart awg-failover" || W "AWG-маршрутов в таблице: $c (нужен 1)" "systemctl restart awg-failover"; }; fi
 echo "$t" | grep -q blackhole && P "blackhole на месте: при падении туннелей утечки в WAN нет" || W "в таблице нет blackhole" "systemctl restart awg-failover"
 [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = 1 ] && P "ip_forward = 1" || F "ip_forward не 1" "sysctl -w net.ipv4.ip_forward=1"
 if [ -n "$EXTRA_SUBNETS" ] && [ -x "$DD/subnets.sh" ]; then   # схема awg-subnets (установщик 1.1+)
