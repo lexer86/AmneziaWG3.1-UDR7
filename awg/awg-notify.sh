@@ -184,6 +184,8 @@ monitor() {
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
     bad=0; systemctl is-active --quiet awg-failover || bad=1
     chk svc "$bad" "🛑 awg-failover остановлен: автопереключения нет" "✅ awg-failover снова работает"
+    # отложенные сообщения (например, о загрузке): отправляем, как только активный туннель снова жив
+    [ -s "$DD/notify.spool" ] && tunnel_ready && "$DD/notify.sh" --flush >/dev/null 2>&1
     if [ $((10#$(date +%H%M))) -ge $((10#$REPORT_TIME)) ] && [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
       date +%F > "$LASTREP"
       report
@@ -191,12 +193,21 @@ monitor() {
   done
 }
 
+tunnel_ready() {   # сторож положил маршрут, и у активного туннеля свежий handshake
+  local a h
+  a=$(active); [ "$a" = none ] && return 1
+  h=$(hs_age "$a"); [ "$h" -ge 0 ] && [ "$h" -lt 180 ]
+}
+
 daemon() {
-  local up t
+  local up t i
   [ -f "$ST" ] || save_base
   monitor & MON=$!
   trap 'kill $MON 2>/dev/null' EXIT INT TERM
-  sleep 20   # после загрузки даём туннелям подняться
+  # после загрузки ждём рабочий туннель (до 5 минут), иначе сообщение уйдёт в очередь и придёт позже
+  sleep 10
+  for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
+  sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
   if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, наблюдатель запущен"; else t="🟢 Наблюдатель awg-notify перезапущен"; fi
   send "<b>$t</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"

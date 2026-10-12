@@ -1761,7 +1761,7 @@ grep -q "alias awg-audit=" /root/.bashrc 2>/dev/null || echo "alias awg-audit='/
 | ⚠️ Запасной канал потерян                      | handshake запасного старше 5 минут три проверки подряд: самый опасный тихий сбой                       |
 | 🛑 awg-failover остановлен                     | три проверки подряд                                                                                    |
 | 📊 Суточный отчёт                              | в 09:00 по часам роутера: состояние, трафик за сутки, переключения, время на запасном, журнал, система |
-| 🔄 Роутер загрузился                           | при старте службы                                                                                      |
+| 🔄 Роутер загрузился                           | после загрузки, как только сторож положил маршрут и у туннеля свежий handshake (ждёт до 5 минут)       |
 
 ### 10.1 Бот и chat id
 
@@ -1793,6 +1793,7 @@ cat > /data/awg/notify.sh <<'EOF'
 #!/bin/bash
 # notify.sh — отправка в Telegram с резервированием: основной туннель -> запасной -> WAN.
 #   notify.sh [--html] "текст"
+#   notify.sh --flush           только отправить отложенные (зовёт awg-notify раз в минуту, когда туннель жив)
 # Не доставилось никуда — сообщение откладывается в notify.spool и уходит при следующей удачной отправке.
 export LC_ALL=C.UTF-8
 DD=${DD:-/data/awg}
@@ -1800,10 +1801,11 @@ DD=${DD:-/data/awg}
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}
 
-MODE=""
+MODE=""; FLUSH=0
+[ "$1" = "--flush" ] && { FLUSH=1; shift; }
 [ "$1" = "--html" ] && { MODE=html; shift; }
 TEXT="${1:0:3900}"
-[ -z "$TEXT" ] && exit 0
+[ -z "$TEXT" ] && [ "$FLUSH" = 0 ] && exit 0
 
 LOG=$DD/notify.log
 SPOOL=$DD/notify.spool
@@ -1865,6 +1867,14 @@ spool_flush() {
 # одна отправка за раз (событие и отчёт могут совпасть)
 exec 9>/tmp/awg-notify.lock
 command -v flock >/dev/null && flock -w 120 9
+
+if [ "$FLUSH" = 1 ]; then
+  [ -s "$SPOOL" ] || exit 0
+  spool_flush
+  [ -s "$SPOOL" ] && exit 1
+  log "отложенные сообщения доставлены"
+  exit 0
+fi
 
 if send_text "$TEXT"; then
   spool_flush
@@ -2067,6 +2077,8 @@ monitor() {
     chk main "$bad" "⚠️ $MAIN: handshake старше 5 минут" "✅ $MAIN: handshake в норме"
     bad=0; systemctl is-active --quiet awg-failover || bad=1
     chk svc "$bad" "🛑 awg-failover остановлен: автопереключения нет" "✅ awg-failover снова работает"
+    # отложенные сообщения (например, о загрузке): отправляем, как только активный туннель снова жив
+    [ -s "$DD/notify.spool" ] && tunnel_ready && "$DD/notify.sh" --flush >/dev/null 2>&1
     if [ $((10#$(date +%H%M))) -ge $((10#$REPORT_TIME)) ] && [ "$(cat "$LASTREP" 2>/dev/null)" != "$(date +%F)" ]; then
       date +%F > "$LASTREP"
       report
@@ -2074,12 +2086,21 @@ monitor() {
   done
 }
 
+tunnel_ready() {   # сторож положил маршрут, и у активного туннеля свежий handshake
+  local a h
+  a=$(active); [ "$a" = none ] && return 1
+  h=$(hs_age "$a"); [ "$h" -ge 0 ] && [ "$h" -lt 180 ]
+}
+
 daemon() {
-  local up t
+  local up t i
   [ -f "$ST" ] || save_base
   monitor & MON=$!
   trap 'kill $MON 2>/dev/null' EXIT INT TERM
-  sleep 20   # после загрузки даём туннелям подняться
+  # после загрузки ждём рабочий туннель (до 5 минут), иначе сообщение уйдёт в очередь и придёт позже
+  sleep 10
+  for i in $(seq 1 58); do tunnel_ready && break; sleep 5; done
+  sleep 3   # даём маршрутам устояться
   up=$(awk '{print int($1)}' /proc/uptime)
   if [ "$up" -lt 900 ]; then t="🔄 Роутер загрузился, наблюдатель запущен"; else t="🟢 Наблюдатель awg-notify перезапущен"; fi
   send "<b>$t</b> · $H"$'\n'"<pre>$(snapshot | esc)</pre>"
@@ -2229,6 +2250,8 @@ UIFILE=zz-awg-ui.conf
 HASHF=/tmp/awg-self.hash
 RESTF=/tmp/awg-self.dnsmasq-restart
 PRIV="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4"
+# сети Telegram: уведомления роутера сами выбирают путь (awgmain → awgbackup → провайдер), их не метим
+TG_NETS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.56.0/22 95.161.64.0/20"
 
 load(){
   TABLE=""; MARK=""; MAIN=awgmain; BACKUP=""; WANIF=ppp0; VPS_IP=""
@@ -2352,7 +2375,7 @@ build(){  # собрать цепочку целиком в ${CH}_NEW и под�
   iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
   iptables -t mangle -N $T 2>/dev/null; iptables -t mangle -F $T
   iptables -t mangle -A $T -m mark ! --mark 0x0/0x7e0000 -j RETURN
-  for n in $PRIV $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
+  for n in $PRIV $TG_NETS $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
   if ui_on; then
     iptables -t mangle -A $T -d "$UI_DNS" -j MARK --set-xmark "$MARK"
     iptables -t mangle -A $T -d "$UI_DNS" -j RETURN
@@ -2381,7 +2404,7 @@ apply_body(){
   local w ep up h ip
   w=$(want); ep=$(endpoints); up=$(upstreams)
   ui_on && ipset create $UISET hash:ip family inet -exist
-  h=$(printf 'v8\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
+  h=$(printf 'v9\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
   if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
     build "$w" "$ep" "$up"
     echo "$h" > $HASHF
@@ -2610,10 +2633,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/main/awg-ui-fix.sh) uninstall
 ```
 
-> [!WARNING]
-> **Если Telegram в ваших правилах PBR «для всех»**
+> [!NOTE]
+> **Telegram awg-self не трогает**
 >
-> Тогда awg-self ведёт и уведомления роутера в туннель. Когда лежат оба туннеля, запасная отправка через провайдера не пройдёт, и сообщение отправится из очереди после восстановления.
+> Сети Telegram исключены из маркировки: уведомления роутера сами выбирают путь — основной туннель, запасной, затем провайдер. Поэтому они доходят, даже если Telegram есть в ваших правилах PBR «для всех устройств».
 
 <a name="p11"></a>
 

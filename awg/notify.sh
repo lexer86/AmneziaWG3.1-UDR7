@@ -1,6 +1,7 @@
 #!/bin/bash
 # notify.sh — отправка в Telegram с резервированием: основной туннель -> запасной -> WAN.
 #   notify.sh [--html] "текст"
+#   notify.sh --flush           только отправить отложенные (зовёт awg-notify раз в минуту, когда туннель жив)
 # Не доставилось никуда — сообщение откладывается в notify.spool и уходит при следующей удачной отправке.
 export LC_ALL=C.UTF-8
 DD=${DD:-/data/awg}
@@ -8,10 +9,11 @@ DD=${DD:-/data/awg}
 [ -r "$DD/awg.env" ] && . "$DD/awg.env"
 MAIN=${MAIN:-awgmain}; BACKUP=${BACKUP:-}
 
-MODE=""
+MODE=""; FLUSH=0
+[ "$1" = "--flush" ] && { FLUSH=1; shift; }
 [ "$1" = "--html" ] && { MODE=html; shift; }
 TEXT="${1:0:3900}"
-[ -z "$TEXT" ] && exit 0
+[ -z "$TEXT" ] && [ "$FLUSH" = 0 ] && exit 0
 
 LOG=$DD/notify.log
 SPOOL=$DD/notify.spool
@@ -73,6 +75,14 @@ spool_flush() {
 # одна отправка за раз (событие и отчёт могут совпасть)
 exec 9>/tmp/awg-notify.lock
 command -v flock >/dev/null && flock -w 120 9
+
+if [ "$FLUSH" = 1 ]; then
+  [ -s "$SPOOL" ] || exit 0
+  spool_flush
+  [ -s "$SPOOL" ] && exit 1
+  log "отложенные сообщения доставлены"
+  exit 0
+fi
 
 if send_text "$TEXT"; then
   spool_flush

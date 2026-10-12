@@ -13,7 +13,7 @@
 #         --uninstall удалить
 #         --help
 # ============================================================================
-INSTALLER_VERSION=1.1.2
+INSTALLER_VERSION=1.1.3
 AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz

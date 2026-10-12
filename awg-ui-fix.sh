@@ -64,6 +64,8 @@ UIFILE=zz-awg-ui.conf
 HASHF=/tmp/awg-self.hash
 RESTF=/tmp/awg-self.dnsmasq-restart
 PRIV="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4"
+# сети Telegram: уведомления роутера сами выбирают путь (awgmain → awgbackup → провайдер), их не метим
+TG_NETS="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.56.0/22 95.161.64.0/20"
 
 load(){
   TABLE=""; MARK=""; MAIN=awgmain; BACKUP=""; WANIF=ppp0; VPS_IP=""
@@ -187,7 +189,7 @@ build(){  # собрать цепочку целиком в ${CH}_NEW и под�
   iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
   iptables -t mangle -N $T 2>/dev/null; iptables -t mangle -F $T
   iptables -t mangle -A $T -m mark ! --mark 0x0/0x7e0000 -j RETURN
-  for n in $PRIV $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
+  for n in $PRIV $TG_NETS $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
   if ui_on; then
     iptables -t mangle -A $T -d "$UI_DNS" -j MARK --set-xmark "$MARK"
     iptables -t mangle -A $T -d "$UI_DNS" -j RETURN
@@ -216,7 +218,7 @@ apply_body(){
   local w ep up h ip
   w=$(want); ep=$(endpoints); up=$(upstreams)
   ui_on && ipset create $UISET hash:ip family inet -exist
-  h=$(printf 'v8\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
+  h=$(printf 'v9\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
   if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
     build "$w" "$ep" "$up"
     echo "$h" > $HASHF
