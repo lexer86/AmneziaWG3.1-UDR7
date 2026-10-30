@@ -2712,6 +2712,7 @@ python3 /data/awg/bot.py menu</code></pre></figure>
 <span class="c">#</span>
 <span class="c"># Запуск с компьютера (R — SSH-алиас роутера):</span>
 <span class="c">#   ssh R 'bash -s' &lt; awg-ui-fix.sh                 установить / обновить</span>
+<span class="c">#   ssh R 'bash -s -- plan' &lt; awg-ui-fix.sh         показать, что изменит установка (ничего не меняет)</span>
 <span class="c">#   ssh R 'bash -s -- check' &lt; awg-ui-fix.sh        только проверка</span>
 <span class="c">#   ssh R 'bash -s -- uninstall' &lt; awg-ui-fix.sh    удалить</span>
 <span class="c"># Настройки (в /data/awg/awg.env): UI_FIX=yes|no, UI_DOMAINS="ui.com", UI_DNS=9.9.9.9</span>
@@ -2735,8 +2736,8 @@ case "$act" in
     [ -x "$DD/self.sh" ] &amp;&amp; "$DD/self.sh" remove
     echo "awg-self удалён: правила убраны, файл dnsmasq удалён, dnsmasq перезапущен. /data/awg/self.sh оставлен."
     exit 0;;
-  install) ;;
-  *) die "неизвестное действие: $act (install | check | uninstall)";;
+  install|plan) ;;
+  *) die "неизвестное действие: $act (install | plan | check | uninstall)";;
 esac
 
 systemctl is-active -q awg-failover || echo "ВНИМАНИЕ: awg-failover не запущен — маршрута в туннель (таблица $TABLE) может не быть"
@@ -2759,6 +2760,7 @@ cat &gt; "$DD/self.sh.new" &lt;&lt;'EOF_SELF'
 <span class="c">#   self.sh reconnect  оборвать текущие соединения роутера к адресам из PBR, чтобы они переподключились через AWG</span>
 <span class="c">#   self.sh remove     убрать всё, что ставит эта служба (вкл. файл dnsmasq)</span>
 <span class="c">#   self.sh check      проверка: OK / WARN / FAIL</span>
+<span class="c">#   self.sh plan       что изменит apply (ничего не меняет)</span>
 <span class="c">#   self.sh status     цепочка со счётчиками</span>
 DD=${DD:-/data/awg}
 iptables(){ command iptables -w 10 "$@"; }   # hotfix: ждать xtables lock, а не падать (иначе ensure плодит копии)
@@ -2834,6 +2836,15 @@ mss(){  # MSS для соединений самого роутера через
     ensure mangle POSTROUTING -o "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
     ensure mangle PREROUTING  -i "$i" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss $((m-40))
   done
+  mss_dups | while read -r n r; do   # копии одного правила (остались от гонок старых версий) — оставить одну
+    while [ "$n" -gt 1 ]; do iptables -t mangle -D ${r#-A } || break; n=$((n-1)); done
+  done
+}
+mss_dups(){  # «число строка» для правил TCPMSS на awg*, которые стоят в mangle больше одного раза
+  local c
+  for c in POSTROUTING PREROUTING; do
+    iptables -t mangle -S "$c" 2&gt;/dev/null | grep -E -- '-[io] awg[^ ]* .*-j TCPMSS' | sort | uniq -c | awk '$1&gt;1'
+  done
 }
 
 <span class="c"># ---------- dnsmasq (UI-модуль) ----------</span>
@@ -2852,10 +2863,47 @@ pstart(){  # время старта процесса, epoch
   st=$(awk '{print $22}' /proc/$1/stat 2&gt;/dev/null); bt=$(awk '/^btime/{print $2}' /proc/stat); hz=$(getconf CLK_TCK 2&gt;/dev/null || echo 100)
   [ -n "$st" ] &amp;&amp; echo $(( bt + st / hz ))
 }
-ui_conf(){
-  local d
+ui_conf(){  # $1 — pid основного dnsmasq
+  local d s files
+  files=$(dnsmasq_files "$1")
   echo "# awg-self: домены UniFi резолвятся через $UI_DNS (через AWG). Файл создаёт /data/awg/self.sh, не редактировать."
-  for d in $UI_DOMAINS; do echo "server=/$d/$UI_DNS"; echo "ipset=/$d/$UISET"; done
+  for d in $UI_DOMAINS; do
+    s=$(uni_sets "$d" "$files")
+    echo "server=/$d/$UI_DNS"; echo "ipset=/$d/$UISET${s:+,$s}"
+  done
+}
+dnsmasq_files(){  # конфиги основного dnsmasq, кроме нашего файла
+  local dir f; dir=$(conf_dir "$1")
+  { tr '\0' '\n' &lt; /proc/$1/cmdline 2&gt;/dev/null | sed -n 's/^--conf-file=//p'
+    if [ -n "$dir" ] &amp;&amp; [ -d "$dir" ]; then
+      for f in "$dir"/*; do [ -f "$f" ] &amp;&amp; [ "${f##*/}" != "$UIFILE" ] &amp;&amp; echo "$f"; done
+    fi; } | grep -v '^$'
+}
+<span class="c"># Наборы ipset, в которые dnsmasq без нас положил бы адреса домена $1 (правила Traffic Routes UniFi).</span>
+<span class="c"># dnsmasq берёт для имени ОДНУ строку ipset= (самый длинный совпавший домен). Если UniFi PBR и UI_DOMAINS</span>
+<span class="c"># содержат один домен (например youtube.com), без объединения работала бы только одна из строк, и доменное</span>
+<span class="c"># правило UniFi оставалось бы пустым. Поэтому наша строка повторяет наборы UniFi: ipset=/d/AWG_UI,&lt;наборы UniFi&gt;.</span>
+uni_sets(){
+  local d=$1 files=$2
+  [ -n "$files" ] || return 0
+  <span class="c"># shellcheck disable=SC2086</span>
+  grep -h '^ipset=/' $files 2&gt;/dev/null | awk -F/ -v d="$(echo "$d" | tr 'A-Z' 'a-z')" -v own="$UISET" '
+    { sets=$NF; gsub(/[ \t\r]+$/, "", sets)
+      for (i = 2; i &lt; NF; i++) {
+        x = tolower($i); if (x == "") continue
+        if (d == x || (length(d) &gt; length(x) &amp;&amp; substr(d, length(d) - length(x)) == "." x)) {
+          if (length(x) &gt; best) { best = length(x); n = 0 }
+          if (length(x) == best) list[++n] = sets
+        }
+      } }
+    END {
+      out = ""
+      for (k = 1; k &lt;= n; k++) {
+        m = split(list[k], a, ",")
+        for (j = 1; j &lt;= m; j++) if (a[j] != "" &amp;&amp; a[j] != own &amp;&amp; !(a[j] in seen)) { seen[a[j]] = 1; out = out "," a[j] }
+      }
+      print substr(out, 2)
+    }'
 }
 restart_dnsmasq(){  # UniFi сам перезапускает dnsmasq; если нет — запускаем той же командой
   local pid=$1 cmd i np
@@ -2873,7 +2921,7 @@ restart_dnsmasq(){  # UniFi сам перезапускает dnsmasq; если 
   sleep 2
 }
 ui_dns(){  # держит файл в conf-dir dnsmasq и следит, что dnsmasq его загрузил
-  local pid dir f st mt
+  local pid dir f st mt c
   pid=$(dnsmasq_pid) || { log "не найден dnsmasq с --conf-dir — UI-модуль пропущен"; return 0; }
   dir=$(conf_dir "$pid"); [ -d "$dir" ] || return 0
   f="$dir/$UIFILE"
@@ -2881,7 +2929,8 @@ ui_dns(){  # держит файл в conf-dir dnsmasq и следит, что d
     [ -f "$f" ] &amp;&amp; { rm -f "$f"; restart_dnsmasq "$pid"; }
     return 0
   fi
-  [ "$(cat "$f" 2&gt;/dev/null)" = "$(ui_conf)" ] || ui_conf &gt; "$f"
+  c=$(ui_conf "$pid")
+  [ "$(cat "$f" 2&gt;/dev/null)" = "$c" ] || printf '%s\n' "$c" &gt; "$f"
   st=$(pstart "$pid"); mt=$(stat -c %Y "$f")
   [ -n "$st" ] &amp;&amp; [ "$st" -lt "$mt" ] &amp;&amp; restart_dnsmasq "$pid"   # dnsmasq старше файла → не видел его
   return 0
@@ -2965,6 +3014,22 @@ in_pbr(){  # уйдёт ли соединение роутера к адресу
   return 1
 }
 
+plan(){  # что изменит apply: копии правил TCPMSS и файл dnsmasq. Ничего не меняет.
+  load
+  local pid dir f new d
+  echo "== копии правил TCPMSS (apply оставит по одному) =="
+  d=$(mss_dups); if [ -n "$d" ]; then echo "$d" | sed -E 's/^ *([0-9]+) /  ×\1  /'; else echo "  нет"; fi
+  echo "== файл dnsmasq $UIFILE =="
+  ui_on || { echo "  UI-модуль выключен (UI_FIX=$UI_FIX)"; return 0; }
+  pid=$(dnsmasq_pid) || { echo "  основной dnsmasq не найден"; return 0; }
+  dir=$(conf_dir "$pid"); f="$dir/$UIFILE"; new=$(ui_conf "$pid")
+  if [ "$(cat "$f" 2&gt;/dev/null)" = "$new" ]; then echo "  без изменений"
+  else
+    diff &lt;(cat "$f" 2&gt;/dev/null) &lt;(printf '%s\n' "$new") | grep '^[&lt;&gt;]' | sed 's/^&lt; /  было:   /; s/^&gt; /  станет: /'
+    echo "  (после установки dnsmasq перезапустится один раз: DNS прервётся на 1–2 с)"
+  fi
+}
+
 reconnect(){
   load
   local wip d n=0
@@ -3010,6 +3075,7 @@ check(){
   n=$(pgrep -fc 'self\.sh run' 2&gt;/dev/null || echo 0)
   [ "$n" -gt 1 ] &amp;&amp; { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(pgrep -f 'self\.sh run' | tr '\n' ' ')"; }
   [ "$(iptables -t mangle -S $CH 2&gt;/dev/null | grep -c -- ' -j MARK ')" -gt "$(( $(want | grep -c .) + 2 ))" ] &amp;&amp; echo "WARN   в $CH есть дубли правил (выполните apply)"
+  n=$(mss_dups | grep -c .); [ "$n" -gt 0 ] &amp;&amp; echo "WARN   правил TCPMSS для awg* с копиями: $n (служба уберёт копии за 5 с; если не уходят — $DD/self.sh apply)"
   n=$(want | grep -c .)
   echo "INFO   правил PBR UniFi (без Kill Switch), повторённых для роутера: $n"
   iptables -t mangle -S AWG_SELF_DNS &gt;/dev/null 2&gt;&amp;1 &amp;&amp; echo "WARN   осталась цепочка AWG_SELF_DNS от старой версии (выполните apply)"
@@ -3025,6 +3091,9 @@ check(){
       st=$(pstart "$pid"); mt=$(stat -c %Y "$dir/$UIFILE")
       if [ "$st" -ge "$mt" ]; then echo "OK     dnsmasq загрузил $dir/$UIFILE: $UI_DOMAINS → $UI_DNS"
       else echo "FAIL   dnsmasq запущен раньше, чем появился $UIFILE (служба перезапустит его в течение минуты)"; rc=1; fi
+      [ "$(cat "$dir/$UIFILE" 2&gt;/dev/null)" = "$(ui_conf "$pid")" ] || echo "WARN   $UIFILE не совпадает с текущими правилами PBR UniFi (служба обновит его за 5 с)"
+      c=$(grep '^ipset=' "$dir/$UIFILE" 2&gt;/dev/null | grep -F "/$UISET," | cut -d/ -f2 | tr '\n' ' ')
+      [ -n "$c" ] &amp;&amp; echo "INFO   домены, общие с правилами PBR UniFi (адреса идут и в $UISET, и в наборы UniFi): $c"
     else echo "FAIL   нет $dir/$UIFILE (служба awg-self запущена?)"; rc=1; fi
     up=$(grep -rhE '^server=[0-9]' "$(dirname "$(tr '\0' '\n' &lt; /proc/$pid/cmdline | sed -n 's/^--conf-file=//p')")" "$dir" 2&gt;/dev/null | cut -d= -f2 | cut -d'#' -f1 | sort -u | tr '\n' ' ')
     echo " $up " | grep -q " $UI_DNS " &amp;&amp; { echo "FAIL   $UI_DNS — это общий DNS роутера: через туннель уйдёт весь DNS. Задайте другой UI_DNS"; rc=1; }
@@ -3070,11 +3139,18 @@ case "${1:-run}" in
   reconnect) reconnect;;
   remove)    remove;;
   check)     check;;
+  plan)      plan;;
   status)    iptables -t mangle -L $CH -v -n --line-numbers; iptables -t mangle -S OUTPUT; ipset list $UISET 2&gt;/dev/null | head -20;;
-  *)         echo "использование: $0 [run|apply|reconnect|remove|check|status]"; exit 1;;
+  *)         echo "использование: $0 [run|apply|reconnect|remove|check|plan|status]"; exit 1;;
 esac
 EOF_SELF
-chmod +x "$DD/self.sh.new" &amp;&amp; mv -f "$DD/self.sh.new" "$DD/self.sh"
+chmod +x "$DD/self.sh.new"
+if [ "$act" = plan ]; then
+  "$DD/self.sh.new" plan; rm -f "$DD/self.sh.new"
+  echo; echo "Ничего не изменено. Установить: ssh R 'bash -s' &lt; awg-ui-fix.sh"
+  exit 0
+fi
+mv -f "$DD/self.sh.new" "$DD/self.sh"
 
 cat &gt; "$DD/awg-self.service" &lt;&lt;'EOF_UNIT'
 [Unit]
@@ -3131,7 +3207,9 @@ OK     unifi.ui.com → … (не заглушка)</code></pre></figure>
   <div class="step"><div class="sn">11.3</div><div class="sb">
     <h4>Настройки и удаление</h4>
     <p>Параметры в <code>/data/awg/awg.env</code>: <code>UI_FIX=yes|no</code>, <code>UI_DOMAINS="ui.com"</code>, <code>UI_DNS=9.9.9.9</code>. После правки служба подхватит их сама за 5 секунд. После обновления прошивки службу возвращает <code>awg-restore.sh</code>.</p>
-<figure class="cb"><figcaption><span class="on on-router">Роутер</span><span class="cbt">проверка и удаление через тот же скрипт</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG3.1-UDR7</span>/main/awg-ui-fix.sh) check
+    <p>Если домен из <code>UI_DOMAINS</code> есть и в ваших правилах PBR UniFi (например, <code>youtube.com</code>), адреса попадают в оба набора: служба повторяет в своей строке <code>ipset=</code> наборы правила UniFi. dnsmasq применяет к домену только одну строку <code>ipset=</code>, и без этого доменное правило UniFi оставалось бы пустым. Копии правил TCPMSS для туннелей служба тоже убирает сама.</p>
+<figure class="cb"><figcaption><span class="on on-router">Роутер</span><span class="cbt">план обновления (ничего не меняет), проверка и удаление через тот же скрипт</span><button class="copy" type="button">Копировать</button></figcaption><pre><code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG3.1-UDR7</span>/main/awg-ui-fix.sh) plan
+bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG3.1-UDR7</span>/main/awg-ui-fix.sh) check
 bash &lt;(curl -fsSL https://raw.githubusercontent.com/<span class="v" data-v="REPO">lexer86/AmneziaWG3.1-UDR7</span>/main/awg-ui-fix.sh) uninstall</code></pre></figure>
     <div class="note n-info"><b>Telegram awg-self не трогает</b><p>Сети Telegram исключены из маркировки: уведомления роутера сами выбирают путь — основной туннель, запасной, затем провайдер. Поэтому они доходят, даже если Telegram есть в ваших правилах PBR «для всех устройств».</p></div>
   </div></div>
