@@ -13,7 +13,7 @@
 #         --uninstall удалить
 #         --help
 # ============================================================================
-INSTALLER_VERSION=1.2.2
+INSTALLER_VERSION=1.2.3
 AWG_REPO=${AWG_REPO:-lexer86/AmneziaWG3.1-UDR7}       # ← ваш GitHub: владелец/репозиторий
 AWG_BRANCH=${AWG_BRANCH:-main}
 BIN_URL_DEFAULT=https://github.com/DjGreeZ/AmneziaWG-Unifi-DreamMachine/raw/main/AmneziaWG-UniFi-v0.2.1-source.tar.gz
@@ -634,7 +634,29 @@ step_vps(){  # step_vps main.conf|backup.conf
 vps_audit(){ [ -n "$VPS_IP" ] && [ ${#SSHO[@]} -gt 0 ] && { title "Аудит VPS"; vssh 'bash /root/audit-server.sh' 2>&1 | sed 's/^/    /'; }; }
 
 # ============================================================ PBR ==========
-pbr_rules(){ ip -4 rule show | awk '/fwmark/ && /lookup [0-9]+\.[a-z]+clt[0-9]+/ { prio=$1; sub(":","",prio); m=""; t=""; for(i=1;i<=NF;i++){ if($i=="fwmark") m=$(i+1); if($i=="lookup") t=$(i+1) } split(t,a,"."); print prio, m, a[1], a[2] }'; }
+pbr_rules(){ ip -4 rule show | awk '/fwmark/ && /lookup [0-9]+\.[a-z]+clt[0-9]+/ { prio=$1; sub(":","",prio); m=""; t=""; for(i=1;i<=NF;i++){ if($i=="fwmark") m=$(i+1); if($i=="lookup") t=$(i+1) } split(t,a,"."); if(!seen[a[2]]++) print prio, m, a[1], a[2] }'; }
+# Метка, которую UniFi сейчас ставит для таблицы рельсы: правило ip rule «fwmark X lookup TABLE»,
+# где X (с маской) совпадает с меткой из цепочки UBIOS_PREROUTING_PBR. Пусто — определить нельзя.
+mark_live(){
+  local t used m tb v k u; t=$(env_get TABLE); [ -n "$t" ] || return 1
+  used=$(iptables -w 10 -t mangle -S UBIOS_PREROUTING_PBR 2>/dev/null | grep -oE 'set-xmark 0x[0-9a-fA-F]+/0x[0-9a-fA-F]+' | awk '{print $2}' | sort -u)
+  [ -n "$used" ] || return 1
+  while read -r m tb; do
+    v=${m%%/*}; k=${m#*/}; [ "$k" = "$m" ] && k=0xffffffff
+    for u in $used; do [ $(( ${u%%/*} & k )) -eq $(( v )) ] && { echo "$m"; return 0; }; done
+  done < <(ip -4 rule show | awk -v t="$t" '/fwmark/ {m=""; tb=""; for(i=1;i<=NF;i++){ if($i=="fwmark") m=$(i+1); if($i=="lookup") tb=$(i+1) } split(tb,a,"."); if(a[1]==t && m!="") print m, tb}')
+  return 1
+}
+# 0 — метка в awg.env устарела (после крупного обновления UniFi, например OS 5 → 6: 0x6a0000/0x7e0000 → 0x21660000/0x3ffe0000)
+mark_stale(){ local l; l=$(mark_live) || return 1; [ "$l" != "$(env_get MARK)" ]; }
+fix_mark(){  # перечитать метку и применить; остальные настройки awg.env не меняются
+  warn "UniFi сменил метку PBR: в awg.env $(env_get MARK), в правилах UniFi $(mark_live)"
+  "$DD/awg-detect.sh" "$(env_get RAIL_IF)" | sed 's/^/    /'
+  systemctl restart awg-failover 2>/dev/null
+  svc_active awg-self && { rm -f /tmp/awg-self.hash; systemctl restart awg-self; }   # пересобрать цепочку с новой меткой
+  mark_stale && { err "метку обновить не удалось: запустите $DD/awg-detect.sh вручную"; return 1; }
+  ok "метка PBR обновлена: $(env_get MARK)"
+}
 make_rail(){
   [ -s "$DD/rail.conf" ] && return 0
   local rk rp; rk=$("$DD/awg" genkey); rp=$("$DD/awg" genkey | "$DD/awg" pubkey)
@@ -1122,6 +1144,7 @@ do_update(){
   install_files
   systemctl daemon-reload
   if svc_active awg-failover; then cp "$DD/awg-failover.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-failover; ok "сторож перезапущен"; fi
+  mark_stale && fix_mark
   if svc_active awg-notify; then cp "$DD/awg-notify.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-notify; ok "awg-notify перезапущен"; fi
   if svc_active awg-bot; then cp "$DD/awg-bot.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-bot; ok "awg-bot перезапущен"; fi
   if svc_active awg-subnets; then cp "$DD/awg-subnets.service" /etc/systemd/system/; systemctl daemon-reload; systemctl restart awg-subnets; ok "awg-subnets перезапущен"; fi
@@ -1136,7 +1159,9 @@ do_restore(){
     cp "$DD/awg-subnets.service" /etc/systemd/system/; systemctl daemon-reload; systemctl enable --now awg-subnets >/dev/null 2>&1
     ok "служба awg-subnets восстановлена"
   fi
-  if ! ip rule show | grep -q "fwmark $(env_get MARK | cut -d/ -f1)"; then
+  if mark_stale; then
+    fix_mark
+  elif ! ip rule show | grep -q "fwmark $(env_get MARK | cut -d/ -f1)"; then
     warn "правило PBR с меткой $(env_get MARK) не найдено: UniFi мог пересоздать профиль"
     yn "Определить таблицу и метку заново?" Y && { step_rail; systemctl restart awg-failover; }
   fi
