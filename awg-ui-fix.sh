@@ -267,7 +267,7 @@ apply_body(){
   local w ep up h ip
   w=$(want); ep=$(endpoints); up=$(upstreams)
   ui_on && ipset create $UISET hash:ip family inet -exist
-  h=$(printf 'v9\n%s\n%s\n%s\n%s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" | md5sum | cut -c1-12)
+  h=$(printf 'v10\n%s\n%s\n%s\n%s %s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" "$MARK" | md5sum | cut -c1-12)
   if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
     build "$w" "$ep" "$up"
     echo "$h" > $HASHF

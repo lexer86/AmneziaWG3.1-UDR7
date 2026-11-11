@@ -60,6 +60,17 @@ done
 ip link show "$RAIL_IF" >/dev/null 2>&1 && P "$RAIL_IF на месте (рельса PBR)" || W "$RAIL_IF отсутствует: UniFi мог убрать PBR-обвязку" "проверьте профиль VPN Client в UniFi, затем $DD/awg-detect.sh"
 
 sec "Маршрутизация"
+used=$(iptables -w 10 -t mangle -S UBIOS_PREROUTING_PBR 2>/dev/null | grep -oE 'set-xmark 0x[0-9a-fA-F]+/0x[0-9a-fA-F]+' | awk '{print $2}' | sort -u)
+live=""   # метка, которую UniFi ставит для таблицы рельсы (UniFi OS 5 и 6 используют разные метки)
+if [ -n "$used" ] && [ -n "$TABLE" ]; then
+  while read -r m_ _; do
+    v_=${m_%%/*}; k_=${m_#*/}; [ "$k_" = "$m_" ] && k_=0xffffffff
+    for u_ in $used; do [ $(( ${u_%%/*} & k_ )) -eq $(( v_ )) ] && { live=$m_; break 2; }; done
+  done < <(ip -4 rule show | awk -v t="$TABLE" '/fwmark/ {m=""; tb=""; for(i=1;i<=NF;i++){ if($i=="fwmark") m=$(i+1); if($i=="lookup") tb=$(i+1) } split(tb,a,"."); if(a[1]==t && m!="") print m, tb}')
+fi
+if [ -n "$live" ]; then
+  [ "$live" = "$MARK" ] && P "метка $MARK совпадает с меткой UniFi для таблицы $TABLE" || W "метка $MARK устарела: UniFi теперь ставит $live" "$DD/awg-detect.sh $RAIL_IF && rm -f /tmp/awg-self.hash && systemctl restart awg-failover awg-self"
+fi
 n=$(ip rule show | grep -c "fwmark ${MARK%%/*}")
 [ "$n" = 1 ] && P "правило PBR fwmark ${MARK%%/*}: одно" || W "правил fwmark ${MARK%%/*}: $n (нужно 1)" "ip rule show"
 t=$(ip route show table "$TABLE" 2>/dev/null)
