@@ -3086,7 +3086,7 @@ build(){  # собрать цепочку целиком в ${CH}_NEW и под�
   while iptables -t mangle -D OUTPUT -j $O 2>/dev/null; do :; done
   iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
   iptables -t mangle -N $T 2>/dev/null; iptables -t mangle -F $T
-  iptables -t mangle -A $T -m mark ! --mark 0x0/0x7e0000 -j RETURN
+  iptables -t mangle -A $T -m mark ! --mark "0x0/${MARK#*/}" -j RETURN   # маска PBR из awg.env (OS 5: 0x7e0000, OS 6: 0x3ffe0000)
   for n in $PRIV $TG_NETS $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
   if ui_on; then
     iptables -t mangle -A $T -d "$UI_DNS" -j MARK --set-xmark "$MARK"
@@ -3116,7 +3116,7 @@ apply_body(){
   local w ep up h ip
   w=$(want); ep=$(endpoints); up=$(upstreams)
   ui_on && ipset create $UISET hash:ip family inet -exist
-  h=$(printf 'v10\n%s\n%s\n%s\n%s %s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" "$MARK" | md5sum | cut -c1-12)
+  h=$(printf 'v11\n%s\n%s\n%s\n%s %s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" "$MARK" | md5sum | cut -c1-12)
   if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
     build "$w" "$ep" "$up"
     echo "$h" > $HASHF
@@ -3217,8 +3217,11 @@ check(){
   local rc=0 n wip ok d c fw ips code pid dir st mt up
   if [ "$(iptables -t mangle -S OUTPUT | grep '^-A OUTPUT' | head -n1)" = "-A OUTPUT -j $CH" ]; then echo "OK     цепочка $CH стоит первой в mangle OUTPUT"
   else echo "FAIL   переход в $CH не первый в mangle OUTPUT (служба awg-self запущена?)"; rc=1; fi
-  n=$(pgrep -fc 'self\.sh run' 2>/dev/null || echo 0)
-  [ "$n" -gt 1 ] && { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(pgrep -f 'self\.sh run' | tr '\n' ' ')"; }
+  # подоболочки службы (apply, $(…), sleep &) несут ту же командную строку — их не считаем
+  local runs p pp
+  runs=$(for p in $(pgrep -f 'self\.sh run'); do pp=$(awk '{print $4}' /proc/$p/stat 2>/dev/null); [ -n "$pp" ] || continue; tr '\0' ' ' < /proc/$pp/cmdline 2>/dev/null | grep -q 'self\.sh run' || echo "$p"; done)
+  n=$(printf '%s\n' "$runs" | grep -c .)
+  [ "$n" -gt 1 ] && { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(echo $runs)"; }
   [ "$(iptables -t mangle -S $CH 2>/dev/null | grep -c -- ' -j MARK ')" -gt "$(( $(want | grep -c .) + 2 ))" ] && echo "WARN   в $CH есть дубли правил (выполните apply)"
   n=$(mss_dups | grep -c .); [ "$n" -gt 0 ] && echo "WARN   правил TCPMSS для awg* с копиями: $n (служба уберёт копии за 5 с; если не уходят — $DD/self.sh apply)"
   n=$(want | grep -c .)
