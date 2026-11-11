@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=6">
-  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=6" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.svg?v=3c967262">
+  <img alt="AmneziaWG на UDR7. Туннель AmneziaWG прямо на роутере, встроенный в штатные правила Policy-Based Routes UniFi" src="assets/readme/hero-light.svg?v=3c967262" width="100%">
 </picture>
 
 <a href="GUIDE.md">
@@ -120,7 +120,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lexer86/AmneziaWG3.1-UDR7/ma
 install.sh            установщик и меню обслуживания
 awg-ui-fix.sh         по желанию: Site Manager (unifi.ui.com) и трафик самого роутера через AWG
 index.html            гайд (GitHub Pages): ручная установка, диагностика, справочник
-VERSION
+VERSION               версия установщика
+versions.env          на каких версиях UniFi проверено; после правки: python3 tools/sync-versions.py
+tools/                sync-versions.py: версии в обложку README, README, index.html и install.sh
 awg/                  файлы роутера → /data/awg
   up.sh                 поднять туннели из main.conf / backup.conf
   failover.sh           сторож: таблица PBR, проверки, переключение
@@ -143,7 +145,7 @@ assets/readme/        картинки этого README
 
 ## 🧪 Что проверено
 
-- **Вживую на UDR7** (UniFi OS 5.1.33, Network 10.6.106): схема целиком — основной туннель от провайдера по протоколу AmneziaWG 3.1, запасной до своего VPS (Ubuntu 24.04), PBR по доменам и адресам, клиенты VPN-сервера роутера, переключение и возврат, панель, аудит, уведомления, доступ к Site Manager.
+- **Вживую на UDR7** (UniFi OS 6.0.17, Network 11.0.99): схема целиком — основной туннель от провайдера по протоколу AmneziaWG 3.1, запасной до своего VPS (Ubuntu 24.04), PBR по доменам и адресам, клиенты VPN-сервера роутера, переключение и возврат, панель, аудит, уведомления, доступ к Site Manager.
 - **На заглушках:** установщик и универсальные версии скриптов (сценарии A, B, C, ошибки конфигов, диагностика, повторное использование сервера, обновление, восстановление, удаление). Проверялось на трех UDR7, установка прошла успешно, в любом случае сообщайте о проблемах в [Issues](https://github.com/lexer86/AmneziaWG3.1-UDR7/issues).
 
 ## 🔒 Безопасность

@@ -181,7 +181,7 @@ preflight(){
   model=$(ubnt-device-info model 2>/dev/null || awk -F= '/^shortname=|^name=/{print $2; exit}' /proc/ubnthal/system.info 2>/dev/null)
   fw=$(ubnt-device-info firmware 2>/dev/null)
   net=$(dpkg-query -W -f='${Version}' unifi 2>/dev/null)
-  info "модель: ${model:-?} · UniFi OS: ${fw:-?} · Network: ${net:-?} (проверено на UDR7, UniFi OS 5.1.33, Network 10.6.106)"
+  info "модель: ${model:-?} · UniFi OS: ${fw:-?} · Network: ${net:-?} (проверено на UDR7, UniFi OS 6.0.17, Network 11.0.99)"
   if [ -n "$model" ] && ! echo "$model" | grep -qiE 'udr7|dream router 7|UDR'; then
     warn "Гайд проверялся на UDR7. На других консолях UniFi может работать, но не проверено."
     yn "Продолжить?" Y || exit 1
