@@ -3217,8 +3217,11 @@ check(){
   local rc=0 n wip ok d c fw ips code pid dir st mt up
   if [ "$(iptables -t mangle -S OUTPUT | grep '^-A OUTPUT' | head -n1)" = "-A OUTPUT -j $CH" ]; then echo "OK     цепочка $CH стоит первой в mangle OUTPUT"
   else echo "FAIL   переход в $CH не первый в mangle OUTPUT (служба awg-self запущена?)"; rc=1; fi
-  n=$(pgrep -fc 'self\.sh run' 2>/dev/null || echo 0)
-  [ "$n" -gt 1 ] && { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(pgrep -f 'self\.sh run' | tr '\n' ' ')"; }
+  # подоболочки службы (apply, $(…), sleep &) несут ту же командную строку — их не считаем
+  local runs p pp
+  runs=$(for p in $(pgrep -f 'self\.sh run'); do pp=$(awk '{print $4}' /proc/$p/stat 2>/dev/null); [ -n "$pp" ] || continue; tr '\0' ' ' < /proc/$pp/cmdline 2>/dev/null | grep -q 'self\.sh run' || echo "$p"; done)
+  n=$(printf '%s\n' "$runs" | grep -c .)
+  [ "$n" -gt 1 ] && { echo "WARN   запущено $n копий «self.sh run» — должна быть одна (служба awg-self): $(echo $runs)"; }
   [ "$(iptables -t mangle -S $CH 2>/dev/null | grep -c -- ' -j MARK ')" -gt "$(( $(want | grep -c .) + 2 ))" ] && echo "WARN   в $CH есть дубли правил (выполните apply)"
   n=$(mss_dups | grep -c .); [ "$n" -gt 0 ] && echo "WARN   правил TCPMSS для awg* с копиями: $n (служба уберёт копии за 5 с; если не уходят — $DD/self.sh apply)"
   n=$(want | grep -c .)
