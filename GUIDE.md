@@ -3086,7 +3086,7 @@ build(){  # собрать цепочку целиком в ${CH}_NEW и под�
   while iptables -t mangle -D OUTPUT -j $O 2>/dev/null; do :; done
   iptables -t mangle -F $O 2>/dev/null; iptables -t mangle -X $O 2>/dev/null
   iptables -t mangle -N $T 2>/dev/null; iptables -t mangle -F $T
-  iptables -t mangle -A $T -m mark ! --mark 0x0/0x7e0000 -j RETURN
+  iptables -t mangle -A $T -m mark ! --mark "0x0/${MARK#*/}" -j RETURN   # маска PBR из awg.env (OS 5: 0x7e0000, OS 6: 0x3ffe0000)
   for n in $PRIV $TG_NETS $ep $up; do iptables -t mangle -A $T -d "$n" -j RETURN; done
   if ui_on; then
     iptables -t mangle -A $T -d "$UI_DNS" -j MARK --set-xmark "$MARK"
@@ -3116,7 +3116,7 @@ apply_body(){
   local w ep up h ip
   w=$(want); ep=$(endpoints); up=$(upstreams)
   ui_on && ipset create $UISET hash:ip family inet -exist
-  h=$(printf 'v10\n%s\n%s\n%s\n%s %s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" "$MARK" | md5sum | cut -c1-12)
+  h=$(printf 'v11\n%s\n%s\n%s\n%s %s %s %s\n' "$w" "$ep" "$up" "$UI_FIX" "$UI_DNS" "$UI_DOMAINS" "$MARK" | md5sum | cut -c1-12)
   if [ "$(cat $HASHF 2>/dev/null)" != "$h" ] || ! iptables -t mangle -S $CH >/dev/null 2>&1; then
     build "$w" "$ep" "$up"
     echo "$h" > $HASHF
